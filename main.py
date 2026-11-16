@@ -54,6 +54,10 @@ def fmt_trip(t: trains.Trip):
 
 async def send(text: str):
     """Envoie sur Discord via webhook (découpe à 2000 caractères)."""
+    url = C.get("DISCORD_WEBHOOK_URL")
+    if "DISCORD_WEBHOOK_URL" in C.missing():
+        log.info("Webhook Discord non configuré, message ignoré")
+        return False
     chunks, cur = [], ""
     for line in text.split("\n"):
         if len(cur) + len(line) > 1900:
@@ -64,22 +68,26 @@ async def send(text: str):
         chunks.append(cur)
     for c in chunks:
         try:
-            async with session.post(C.DISCORD_WEBHOOK_URL, json={"content": c, "username": "EDT & Trains"},
+            async with session.post(url, json={"content": c, "username": "EDT & Trains"},
                                     timeout=aiohttp.ClientTimeout(total=15)) as r:
                 if r.status == 429:  # rate limit
                     await asyncio.sleep((await r.json()).get("retry_after", 2))
-                    await session.post(C.DISCORD_WEBHOOK_URL, json={"content": c})
+                    await session.post(url, json={"content": c})
                 elif r.status >= 300:
                     log.warning("Webhook Discord %s : %s", r.status, await r.text())
+                    return False
         except Exception as e:
             log.warning("Webhook Discord : %s", e)
+            return False
+    return True
 
 
 async def ha_notify(payload: dict):
-    if not C.HA_WEBHOOK_URL:
+    url = C.get("HA_WEBHOOK_URL")
+    if not url:
         return
     try:
-        await session.post(C.HA_WEBHOOK_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10))
+        await session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10))
     except Exception as e:
         log.warning("Webhook HA : %s", e)
 
@@ -129,6 +137,8 @@ def next_school_day() -> dt.date:
 
 # ---------- tâches ----------
 async def do_ics_sync(force=False) -> int:
+    if not force and "ICS_URL" in C.missing():
+        return 0
     res = await ics_sync.sync(session, force=force)
     if not res:
         return 0
@@ -161,7 +171,7 @@ async def do_ics_sync(force=False) -> int:
 async def recap_check():
     t = now()
     k = f"recap|{t.date()}"
-    if t.strftime("%H:%M") >= C.RECAP_HOUR and not db.get(k):
+    if t.strftime("%H:%M") >= C.get("RECAP_HOUR") and not db.get(k):
         db.put(k, True)
         tomorrow = t.date() + dt.timedelta(days=1)
         if courses(tomorrow):
@@ -169,6 +179,8 @@ async def recap_check():
 
 
 async def monitor():
+    if "PRIM_API_KEY" in C.missing():
+        return
     t_now = now()
     plan = await get_plan(t_now.date())
     if not plan:
@@ -176,13 +188,13 @@ async def monitor():
     status_txt = []
     for r in plan["aller"]:
         t, o = r["trip"], r["origin"]
-        if not (r["leave"] - dt.timedelta(minutes=C.CHECK_BEFORE) <= t_now <= t.base_dep + dt.timedelta(minutes=60)):
+        if not (r["leave"] - dt.timedelta(minutes=C.get("CHECK_BEFORE")) <= t_now <= t.base_dep + dt.timedelta(minutes=60)):
             continue
         rt, cancelled = await trains.check(session, t, o)
         if rt and t_now > rt.dep:
             continue  # train parti
         delay = rt.delay if rt else 0
-        kind = "cancel" if cancelled else ("late" if delay >= C.DELAY_ALERT else "ok")
+        kind = "cancel" if cancelled else ("late" if delay >= C.get("DELAY_ALERT") else "ok")
         status_txt.append(f"{o['name']} {hm(t.base_dep)} : " +
                           ("SUPPRIMÉ" if cancelled else f"+{delay} min" if delay else "à l'heure"))
         k = f"notif|{t.key}"
@@ -219,13 +231,31 @@ async def monitor():
         await send(await msg_retour())
 
 
-async def every(seconds: int, fn, name: str):
+async def every(seconds, fn, name: str):
     while True:
         try:
             await fn()
-        except Exception:
-            log.exception("Erreur dans %s", name)
-        await asyncio.sleep(seconds)
+        except Exception as e:
+            log.warning("Erreur dans %s : %s", name, e)
+        await asyncio.sleep(seconds() if callable(seconds) else seconds)
+
+
+async def test_discord() -> str:
+    ok = await send("👋 Test : le webhook fonctionne !")
+    return "✅ Message envoyé sur Discord" if ok else "❌ Échec (vérifie l'URL du webhook, voir les logs)"
+
+
+async def test_prim() -> str:
+    lines = []
+    for p in C.origins() + [C.dest()]:
+        sid = await trains.resolve(session, p)
+        lines.append(f"✅ {p['name']} → {sid}")
+    return "\n".join(lines)
+
+
+def on_config_saved():
+    db.put("stops", {})
+    state["plan"] = None
 
 
 # ---------- démarrage ----------
@@ -237,13 +267,16 @@ async def main():
         "train": lambda: msg_plan(next_school_day()),
         "retour": msg_retour,
         "send": send,
+        "test_discord": test_discord,
+        "test_prim": test_prim,
+        "config_saved": on_config_saved,
     }
     runner = aioweb.AppRunner(web.make_app(state, actions))
     await runner.setup()
     await aioweb.TCPSite(runner, "0.0.0.0", C.WEB_PORT).start()
     log.info("Site web : http://0.0.0.0:%d", C.WEB_PORT)
     await asyncio.gather(
-        every(C.ICS_REFRESH_MIN * 60, do_ics_sync, "ics"),
+        every(lambda: C.get("ICS_REFRESH_MIN") * 60, do_ics_sync, "ics"),
         every(60, recap_check, "recap"),
         every(180, monitor, "monitor"),
     )

@@ -29,4 +29,5 @@ RestartSec=10
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload && systemctl enable -q edt-trains && systemctl restart edt-trains
-echo "✅ Installé. Remplis $DIR/.env puis : systemctl restart edt-trains && journalctl -u edt-trains -f"
+IP=$(hostname -I | awk "{print \$1}")
+echo "✅ Installé. Configure tout sur : http://$IP:8080/config"

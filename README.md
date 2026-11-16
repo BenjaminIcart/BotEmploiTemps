@@ -7,7 +7,7 @@ Emploi du temps (.ics) → Discord (webhook) + surveillance des retards ligne N 
 - **20h** : EDT du lendemain + heure de départ conseillée (Coignières 🚶 / Trappes 🚗) + trains retour.
 - **Le matin** : surveillance du train conseillé (✅ à l'heure / ⏱️ retard / 🚫 supprimé + alternatives).
 - **10 min avant la fin des cours** : prochains trains retour.
-- **Site web** (`:8080`) : EDT de la semaine, train conseillé, retour, sync forcée, historique des retards.
+- **Site web** (`:8080`) : EDT de la semaine, train conseillé, retour, sync forcée, historique des retards, page **/config**.
 - **Optionnel** : webhook Home Assistant à chaque changement d'état.
 
 Données trains : API PRIM d'Île-de-France Mobilités (Calculateur IDFM / Navitia, temps réel).
@@ -17,12 +17,12 @@ Dans le shell du nœud Proxmox :
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/BenjaminIcart/BotEmploiTemps/main/proxmox-create-lxc.sh)"
 ```
-Puis :
-```bash
-pct enter <CTID>
-nano /opt/edt-trains/.env
-systemctl restart edt-trains && journalctl -u edt-trains -f
-```
+Puis ouvre **http://IP_DU_CONTAINER:8080/config** et remplis :
+- le lien `.ics` de l'emploi du temps
+- l'URL du webhook Discord
+- la clé API PRIM
+
+Les boutons de test vérifient chaque élément. Tout est appliqué sans redémarrage.
 
 ## Mise à jour
 ```bash

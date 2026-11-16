@@ -25,5 +25,5 @@ pct exec "$CTID" -- bash -c "export LANG=C.UTF-8 LC_ALL=C.UTF-8; apt-get update 
 IP=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
 echo ""
 echo "✅ Container $CTID créé — IP : $IP"
-echo "➡️  pct enter $CTID   puis   nano /opt/edt-trains/.env   puis   systemctl restart edt-trains"
-echo "🌐 Site : http://$IP:8080"
+echo "⚙️  Configure tout sur : http://$IP:8080/config"
+echo "📜 Logs : pct exec $CTID -- journalctl -u edt-trains -f"

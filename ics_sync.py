@@ -7,7 +7,8 @@ import icalendar
 import recurring_ical_events
 
 import db
-from config import ICS_URL, TZ
+import config as C
+from config import TZ
 
 log = logging.getLogger("ics")
 
@@ -73,7 +74,10 @@ async def sync(session: aiohttp.ClientSession, force=False):
         headers["If-None-Match"] = meta["etag"]
     if meta.get("lm"):
         headers["If-Modified-Since"] = meta["lm"]
-    async with session.get(ICS_URL, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as r:
+    url = C.get("ICS_URL")
+    if "ICS_URL" in C.missing():
+        raise RuntimeError("Lien .ics non configuré (page /config)")
+    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as r:
         if r.status == 304:
             return None
         r.raise_for_status()

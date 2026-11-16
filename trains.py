@@ -6,11 +6,11 @@ from dataclasses import dataclass
 import aiohttp
 
 import db
-from config import DEST, MARGIN, ORIGINS, PRIM_API_KEY, TZ, WALK_SCHOOL
+import config as C
+from config import TZ
 
 log = logging.getLogger("trains")
 BASE = "https://prim.iledefrance-mobilites.fr/marketplace/v2/navitia"
-HEADERS = {"apikey": PRIM_API_KEY}
 
 
 def _nv(t: str) -> dt.datetime:
@@ -42,7 +42,7 @@ class Trip:
 
 
 async def _get(session, path, params):
-    async with session.get(BASE + path, params=params, headers=HEADERS,
+    async with session.get(BASE + path, params=params, headers={"apikey": C.get("PRIM_API_KEY")},
                            timeout=aiohttp.ClientTimeout(total=20)) as r:
         if r.status == 404:  # Navitia renvoie 404 quand aucun trajet
             return {}
@@ -98,15 +98,15 @@ async def journeys(session, frm, to, when, arrival, origin_name, count=4) -> lis
 
 def target_arrival(day: dt.date, first_start: str) -> dt.datetime:
     h, m = map(int, first_start.split(":"))
-    return dt.datetime.combine(day, dt.time(h, m), TZ) - dt.timedelta(minutes=WALK_SCHOOL + MARGIN)
+    return dt.datetime.combine(day, dt.time(h, m), TZ) - dt.timedelta(minutes=C.get("WALK_SCHOOL") + C.get("MARGIN"))
 
 
 async def plan_aller(session, day: dt.date, first_start: str) -> list[dict]:
     """Pour chaque gare : le train le plus tard qui arrive à l'heure + l'heure de départ de chez toi."""
     target = target_arrival(day, first_start)
-    dest = await resolve(session, DEST)
+    dest = await resolve(session, C.dest())
     res = []
-    for o in ORIGINS:
+    for o in C.origins():
         oid = await resolve(session, o)
         trips = await journeys(session, oid, dest, target, arrival=True, origin_name=o["name"], count=3)
         ok = [t for t in trips if t.arr <= target] or trips
@@ -121,11 +121,11 @@ async def plan_aller(session, day: dt.date, first_start: str) -> list[dict]:
 
 async def plan_retour(session, day: dt.date, last_end: str, count=3) -> list[dict]:
     h, m = map(int, last_end.split(":"))
-    when = max(dt.datetime.combine(day, dt.time(h, m), TZ) + dt.timedelta(minutes=WALK_SCHOOL),
+    when = max(dt.datetime.combine(day, dt.time(h, m), TZ) + dt.timedelta(minutes=C.get("WALK_SCHOOL")),
                dt.datetime.now(TZ))
-    dest = await resolve(session, DEST)
+    dest = await resolve(session, C.dest())
     res = []
-    for o in ORIGINS:
+    for o in C.origins():
         oid = await resolve(session, o)
         trips = await journeys(session, dest, oid, when, arrival=False, origin_name=o["name"], count=count)
         res.append({"origin": o, "trips": trips[:count]})
@@ -135,7 +135,7 @@ async def plan_retour(session, day: dt.date, last_end: str, count=3) -> list[dic
 async def check(session, planned: Trip, origin_cfg: dict):
     """Retourne (trip_temps_reel | None, supprimé: bool)."""
     oid = await resolve(session, origin_cfg)
-    dest = await resolve(session, DEST)
+    dest = await resolve(session, C.dest())
     rt = await journeys(session, oid, dest, planned.base_dep - dt.timedelta(minutes=1),
                         arrival=False, origin_name=planned.origin, count=6)
     for t in rt:
@@ -146,6 +146,6 @@ async def check(session, planned: Trip, origin_cfg: dict):
 
 async def alternatives(session, origin_cfg: dict, target: dt.datetime, after: dt.datetime) -> list[Trip]:
     oid = await resolve(session, origin_cfg)
-    dest = await resolve(session, DEST)
+    dest = await resolve(session, C.dest())
     trips = await journeys(session, oid, dest, after, arrival=False, origin_name=origin_cfg["name"], count=4)
     return trips[:3]
