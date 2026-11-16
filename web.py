@@ -67,6 +67,7 @@ code{background:#ffffff14;padding:.05rem .35rem;border-radius:5px;font-size:.88e
 .toast{background:#30d15818;border:1px solid var(--green);border-radius:12px;padding:.8rem 1rem;margin-bottom:1rem}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1rem}
 .sk{color:var(--mute)}
+.tlimg{width:100%;max-width:1000px;border-radius:14px;margin-top:.8rem;display:block}
 .chain{margin-top:.6rem;padding:.6rem .7rem;border-radius:10px;background:#40c8e014;color:var(--txt);line-height:1.7;font-size:.93rem}
 .tls{margin-top:.8rem;border-top:1px solid var(--line);padding-top:.6rem}
 .tl{display:flex;gap:.5rem;padding:.25rem .4rem;border-radius:8px;color:var(--mute);font-variant-numeric:tabular-nums}
@@ -101,6 +102,7 @@ fetch('/api/hero'+q).then(r=>r.json()).then(h=>{
         (o.chain.metro?`🚇 <b>${o.chain.metro.dep}</b> M${o.chain.metro.line} → ${o.chain.metro.arr} ${o.chain.stop}<br>`:`🚇 Métro 6 → ${o.chain.stop} (estimé)<br>`)+
         `🚶 🏫 <b>${o.chain.school} à ${o.chain.school_arr}</b> ${o.chain.late?'⚠️':'✅'}</div>`:''}</div>`
   }).join('')+'</div>';
+  if(h.png) s+=`<img class=tlimg src="/trajet.png${q}${q?'&':'?'}t=${Date.now()}">`;
   el.innerHTML=s;
 }).catch(()=>{document.getElementById('hero').innerHTML='<div class=sk>Erreur de chargement</div>'});
 </script>"""
@@ -140,6 +142,9 @@ def render_card(c: dict) -> str:
             out.append(f"<div class='{'' if f.get('inline') else 'full'}'><div class=fn>{md(f['name'])}</div>"
                        f"<div class=fv>{md(f['value'])}</div></div>")
         out.append("</div>")
+    if c.get("_png"):
+        import base64
+        out.append(f"<img class=tlimg src='data:image/png;base64,{base64.b64encode(c['_png']).decode()}'>")
     if c.get("footer"):
         out.append(f"<div class=eft>{md(c['footer']['text'])}</div>")
     out.append("</div>")
@@ -226,9 +231,17 @@ def make_app(state: dict, actions: dict) -> web.Application:
         out.append(HERO_JS)
         return page("".join(out), request, "/")
 
+    async def trajet_png(_):
+        png = state.get("hero_png")
+        if not png:
+            raise web.HTTPNotFound()
+        return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
+
     async def api_hero(_):
         try:
-            return web.json_response(await actions["hero"]())
+            h = dict(await actions["hero"]())
+            h["png"] = bool(state.get("hero_png"))
+            return web.json_response(h)
         except Exception as ex:
             return web.json_response({"error": str(ex)})
 
@@ -331,6 +344,7 @@ def make_app(state: dict, actions: dict) -> web.Application:
     app = web.Application(middlewares=[auth])
     app.router.add_get("/", index)
     app.router.add_get("/api/hero", api_hero)
+    app.router.add_get("/trajet.png", trajet_png)
     app.router.add_get("/train", cards_action("train", "Prochain trajet", "/train"))
     app.router.add_get("/retour", cards_action("retour", "Trains retour", "/retour"))
     app.router.add_get("/sync", sync)

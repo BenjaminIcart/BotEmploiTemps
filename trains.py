@@ -114,14 +114,17 @@ async def plan_aller(session, day: dt.date, first_start: str) -> list[dict]:
     course = dt.datetime.combine(day, dt.time(h, m), TZ)
     latest_ok = course - dt.timedelta(minutes=C.school_delay())  # limite absolue (sans marge)
     dest = await resolve(session, C.dest())
+    pref = C.preferred_origin(first_start)
+    early = pref == C.get("EARLY_ORIGIN") and first_start <= (C.get("EARLY_LIMIT") or "08:00")
+    ahead = 0 if early else C.get("LATE_AHEAD")
     res = []
     for o in C.origins():
         oid = await resolve(session, o)
-        trips = await journeys(session, oid, dest, target, arrival=True, origin_name=o["name"], count=4)
+        trips = await journeys(session, oid, dest, target, arrival=True, origin_name=o["name"], count=4 + ahead)
         ok = [t for t in trips if t.arr <= target]
         main = max(ok, key=lambda t: t.dep) if ok else None
         # train habituel (ex. 07:16) : prioritaire s'il arrive avant le début des cours
-        usual = o.get("usual")
+        usual = o.get("usual") if early or o["name"] != pref else ""
         if usual:
             uh, um = map(int, usual.split(":"))
             u_when = dt.datetime.combine(day, dt.time(uh, um), TZ)
@@ -133,6 +136,9 @@ async def plan_aller(session, day: dt.date, first_start: str) -> list[dict]:
                 trips = sorted({t.key: t for t in trips + cand}.values(), key=lambda t: t.dep)
         if main is None and trips:
             main = trips[-1]
+        if main is not None and o["name"] == pref and ahead:  # cours plus tard : X train(s) d'avance
+            idx = next(i for i, x in enumerate(trips) if x.key == main.key)
+            main = trips[max(0, idx - ahead)]
         if main is None:
             res.append({"origin": o, "trip": None, "target": target, "course": course, "leave": None, "list": []})
             continue
@@ -142,7 +148,6 @@ async def plan_aller(session, day: dt.date, first_start: str) -> list[dict]:
         after = [t for t in after if t.dep > main.dep and t.key != main.key][:1]
         res.append({"origin": o, "trip": main, "target": target, "latest_ok": latest_ok, "course": course,
                     "leave": main.dep - dt.timedelta(minutes=o["access"]), "list": before + [main] + after})
-    pref = C.get("PREFERRED_ORIGIN")
     res.sort(key=lambda r: r["origin"]["name"] != pref)
     if res and res[0]["trip"]:  # trajet complet (métro + marche) pour la gare principale
         res[0]["chain"] = await chain(session, res[0]["trip"].arr)
@@ -248,7 +253,7 @@ async def backup_routes(session, origin_cfg: dict, target: dt.datetime, n_line_i
     return rs[-2:]
 
 
-async def plan_retour(session, day: dt.date, last_end: str, count=3) -> list[dict]:
+async def plan_retour(session, day: dt.date, last_end: str, count=3, pref: str | None = None) -> list[dict]:
     h, m = map(int, last_end.split(":"))
     when = max(dt.datetime.combine(day, dt.time(h, m), TZ) + dt.timedelta(minutes=C.school_delay()),
                dt.datetime.now(TZ))
@@ -258,7 +263,8 @@ async def plan_retour(session, day: dt.date, last_end: str, count=3) -> list[dic
         oid = await resolve(session, o)
         trips = await journeys(session, dest, oid, when, arrival=False, origin_name=o["name"], count=count)
         res.append({"origin": o, "trips": trips[:count]})
-    res.sort(key=lambda r: r["origin"]["name"] != C.get("PREFERRED_ORIGIN"))
+    pref = pref or C.get("EARLY_ORIGIN")
+    res.sort(key=lambda r: r["origin"]["name"] != pref)
     return res
 
 

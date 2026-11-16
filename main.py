@@ -1,6 +1,7 @@
 """EDT (.ics) -> Discord (webhook, cards) + surveillance des trains ligne N + site web."""
 import asyncio
 import datetime as dt
+import json
 import logging
 import time
 
@@ -43,12 +44,29 @@ async def send(embeds: list, content: str | None = None) -> bool:
         return False
     batches = [embeds[i:i + 10] for i in range(0, len(embeds), 10)] or [[]]
     for i, batch in enumerate(batches):
-        payload = {"username": "EDT & Trains", "embeds": batch}
+        files, clean = [], []
+        for j, emb in enumerate(batch):  # images (frise du trajet) envoyées en pièce jointe
+            emb = dict(emb)
+            png = emb.pop("_png", None)
+            if png:
+                name = f"trajet{j}.png"
+                emb["image"] = {"url": f"attachment://{name}"}
+                files.append((name, png))
+            clean.append(emb)
+        payload = {"username": "EDT & Trains", "embeds": clean}
         if content and i == 0:
             payload["content"] = content
         for _ in range(2):
+            if files:
+                body = aiohttp.FormData()
+                body.add_field("payload_json", json.dumps(payload), content_type="application/json")
+                for n_, (name, png) in enumerate(files):
+                    body.add_field(f"files[{n_}]", png, filename=name, content_type="image/png")
+                kw = {"data": body}
+            else:
+                kw = {"json": payload}
             try:
-                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                async with session.post(url, timeout=aiohttp.ClientTimeout(total=20), **kw) as r:
                     if r.status == 429:
                         await asyncio.sleep((await r.json()).get("retry_after", 2))
                         continue
@@ -117,7 +135,7 @@ async def plan_cards(day: dt.date, prefix="", web=False) -> list:
     cs = onsite(day)
     if cs:
         aller = await trains.plan_aller(session, day, cs[0]["start"])
-        retour = await trains.plan_retour(session, day, cs[-1]["end"])
+        retour = await trains.plan_retour(session, day, cs[-1]["end"], pref=C.preferred_origin(cs[0]["start"]))
         problem = not aller or not aller[0]["trip"]
         backups = await get_backups(aller) if (problem or web) else []
         out.append(K.aller_card(aller, cs[0]["start"], backups if problem else None,
@@ -129,7 +147,9 @@ async def plan_cards(day: dt.date, prefix="", web=False) -> list:
 
 
 async def retour_cards(end: str | None = None) -> list:
-    res = await trains.plan_retour(session, now().date(), end or now().strftime("%H:%M"))
+    cs = onsite(now().date())
+    pref = C.preferred_origin(cs[0]["start"]) if cs else None
+    res = await trains.plan_retour(session, now().date(), end or now().strftime("%H:%M"), pref=pref)
     return [K.retour_card(res, f" · fin à {end}" if end else "")]
 
 
@@ -141,7 +161,16 @@ async def hero() -> dict:
     cs = onsite(day)
     data = {"day": K.jour(day), "today": day == now().date(), "first": cs[0] if cs else None, "options": []}
     if cs and "PRIM_API_KEY" not in C.missing():
-        for i, r in enumerate(await trains.plan_aller(session, day, cs[0]["start"])):
+        aller = await trains.plan_aller(session, day, cs[0]["start"])
+        state["hero_png"] = None
+        if aller and aller[0]["trip"]:
+            try:
+                import timeline
+                tl = timeline.from_plan(aller[0], C.get("SCHOOL_NAME"), C.metro_stop()["name"])
+                state["hero_png"] = timeline.render(tl) if tl else None
+            except Exception as e:
+                log.warning("Frise : %s", e)
+        for i, r in enumerate(aller):
             t = r["trip"]
             if not t:
                 data["options"].append({"origin": r["origin"]["name"], "emoji": r["origin"]["emoji"],

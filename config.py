@@ -21,7 +21,10 @@ FIELDS = [
     ("PRIM_API_KEY", "Clé API PRIM (IDFM)", "secret", "",
      "prim.iledefrance-mobilites.fr › abonnement « Calculateur IDFM – Accès générique (v2) »"),
     ("__Trajet", "", "", "", ""),
-    ("PREFERRED_ORIGIN", "Gare principale", "choice:Trappes|Coignières", "Trappes", "affichée en premier"),
+    ("EARLY_LIMIT", "Cours tôt : 1er cours à … ou avant", "time", "08:00", "au-delà = journée « tardive »"),
+    ("EARLY_ORIGIN", "Gare si cours tôt", "choice:Trappes|Coignières", "Trappes", ""),
+    ("LATE_ORIGIN", "Gare si cours plus tard", "choice:Coignières|Trappes", "Coignières", ""),
+    ("LATE_AHEAD", "Trains d'avance si cours plus tard", "int", "1", "0 = le dernier train qui passe"),
     ("USUAL_TRAPPES", "Train habituel à Trappes", "time", "07:16", "pris en priorité s'il arrive à temps (vide = auto)"),
     ("USUAL_COIGNIERES", "Train habituel à Coignières", "time", "", "vide = auto"),
     ("ACCESS_COIGNIERES", "Maison → quai Coignières (min)", "int", "18", "à pied + marge"),
@@ -101,6 +104,11 @@ def origins():
 
 def dest():
     return {"name": "Montparnasse", "query": "Paris Montparnasse", "id": get("STOP_MONTPARNASSE")}
+
+
+def preferred_origin(first_start: str) -> str:
+    early = first_start <= (get("EARLY_LIMIT") or "08:00")
+    return get("EARLY_ORIGIN") if early else get("LATE_ORIGIN")
 
 
 def school_delay() -> int:

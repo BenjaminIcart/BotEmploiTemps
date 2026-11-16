@@ -97,6 +97,15 @@ def aller_card(aller, first_start, backups=None, school_name="École", stop_name
         lines.append("⚠️ Arrivée après le début du cours")
     others = [x for x in r["list"] if x.key != t.key]
     fields = []
+    png = None
+    try:
+        import timeline
+        tl = timeline.from_plan(r, school_name, stop_name)
+        png = timeline.render(tl) if tl else None
+    except Exception:
+        png = None
+    if png:  # la frise remplace le détail texte
+        lines = [lines[0]] + (["⚠️ Arrivée après le début du cours"] if late else [])
     if others:
         fields.append(("Autres trains", " · ".join(
             hm(x.dep) + (" (trop tard)" if x.arr > r.get("latest_ok", r["target"]) else "") for x in others), True))
@@ -105,8 +114,11 @@ def aller_card(aller, first_start, backups=None, school_name="École", stop_name
             fields.append((r2["origin"]["name"], f"pars {hm(r2['leave'])} · train {hm(r2['trip'].dep)}", True))
     if backups:
         fields.append(("Sans le N", "\n".join(route_str(b) for b in backups), False))
-    return card(f"Départ {hm(r['leave'])} · {o['name']}", "orange" if late or backups else "purple",
-                "\n".join(lines), fields)
+    c = card(f"Départ {hm(r['leave'])} · {o['name']}", "orange" if late or backups else "purple",
+             "\n".join(lines), fields)
+    if png:
+        c["_png"] = png
+    return c
 
 
 def retour_card(retour, subtitle=""):

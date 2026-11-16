@@ -2,3 +2,4 @@ aiohttp>=3.9
 icalendar>=5
 recurring-ical-events>=3
 python-dotenv>=1
+pillow>=10.1
