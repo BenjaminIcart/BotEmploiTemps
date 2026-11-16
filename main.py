@@ -1,11 +1,13 @@
-"""EDT (.ics) -> Discord (webhook) + surveillance des trains ligne N + petit site web."""
+"""EDT (.ics) -> Discord (webhook, cards) + surveillance des trains ligne N + site web."""
 import asyncio
 import datetime as dt
 import logging
+import time
 
 import aiohttp
 from aiohttp import web as aioweb
 
+import cards as K
 import config as C
 import db
 import ics_sync
@@ -15,70 +17,43 @@ import web
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("main")
 
-JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
 session: aiohttp.ClientSession | None = None
-state: dict = {"plan": None, "status_text": ""}
+state: dict = {"plan": None, "live": {}, "hero": None, "hero_ts": 0}
 
 
-# ---------- helpers ----------
 def now():
     return dt.datetime.now(C.TZ)
-
-
-def hm(d):
-    return d.strftime("%H:%M")
-
-
-def jour(d):
-    return f"{JOURS[d.weekday()]} {d:%d/%m}"
 
 
 def courses(day):
     return db.get("edt", {}).get(day.isoformat(), [])
 
 
-def fmt_course(c):
-    return f"`{c['start']}-{c['end']}` {c['summary']}" + (f" · {c['location']}" if c["location"] else "")
-
-
-def fmt_edt(day):
-    cs = courses(day)
-    return f"📅 **{jour(day)}**\n" + ("\n".join(map(fmt_course, cs)) if cs else "Pas cours 🎉")
-
-
-def fmt_trip(t: trains.Trip):
-    if t.delay > 0:
-        return f"~~{hm(t.base_dep)}~~ **{hm(t.dep)}** (+{t.delay} min) → {hm(t.arr)} `{t.mission}`"
-    return f"**{hm(t.dep)}** → {hm(t.arr)} `{t.mission}`"
-
-
-async def send(text: str):
-    """Envoie sur Discord via webhook (découpe à 2000 caractères)."""
+# ---------- Discord ----------
+async def send(embeds: list, content: str | None = None) -> bool:
+    """Envoie des cards sur Discord via le webhook (10 cards max par message)."""
     url = C.get("DISCORD_WEBHOOK_URL")
     if "DISCORD_WEBHOOK_URL" in C.missing():
         log.info("Webhook Discord non configuré, message ignoré")
         return False
-    chunks, cur = [], ""
-    for line in text.split("\n"):
-        if len(cur) + len(line) > 1900:
-            chunks.append(cur)
-            cur = ""
-        cur += line + "\n"
-    if cur.strip():
-        chunks.append(cur)
-    for c in chunks:
-        try:
-            async with session.post(url, json={"content": c, "username": "EDT & Trains"},
-                                    timeout=aiohttp.ClientTimeout(total=15)) as r:
-                if r.status == 429:  # rate limit
-                    await asyncio.sleep((await r.json()).get("retry_after", 2))
-                    await session.post(url, json={"content": c})
-                elif r.status >= 300:
-                    log.warning("Webhook Discord %s : %s", r.status, await r.text())
-                    return False
-        except Exception as e:
-            log.warning("Webhook Discord : %s", e)
-            return False
+    batches = [embeds[i:i + 10] for i in range(0, len(embeds), 10)] or [[]]
+    for i, batch in enumerate(batches):
+        payload = {"username": "EDT & Trains", "embeds": batch}
+        if content and i == 0:
+            payload["content"] = content
+        for _ in range(2):
+            try:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                    if r.status == 429:
+                        await asyncio.sleep((await r.json()).get("retry_after", 2))
+                        continue
+                    if r.status >= 300:
+                        log.warning("Webhook Discord %s : %s", r.status, await r.text())
+                        return False
+                    break
+            except Exception as e:
+                log.warning("Webhook Discord : %s", e)
+                return False
     return True
 
 
@@ -93,6 +68,18 @@ async def ha_notify(payload: dict):
 
 
 # ---------- plans ----------
+def next_school_day() -> dt.date:
+    today = now().date()
+    cs = courses(today)
+    if cs and now().strftime("%H:%M") < cs[0]["start"]:
+        return today
+    for i in range(1, 8):  # prochain jour avec cours (saute le week-end)
+        d = today + dt.timedelta(days=i)
+        if courses(d):
+            return d
+    return today + dt.timedelta(days=1)
+
+
 async def get_plan(day: dt.date):
     cs = courses(day)
     if not cs:
@@ -105,34 +92,40 @@ async def get_plan(day: dt.date):
     return state["plan"]
 
 
-async def msg_plan(day: dt.date, title="") -> str:
+async def plan_cards(day: dt.date, prefix="") -> list:
     cs = courses(day)
-    if not cs:
-        return f"{title}{fmt_edt(day)}"
-    aller = await trains.plan_aller(session, day, cs[0]["start"])
-    retour = await trains.plan_retour(session, day, cs[-1]["end"])
-    out = [title + fmt_edt(day), "", f"🚆 **Aller** (cours à {cs[0]['start']})"]
-    for r in aller:
-        o = r["origin"]
-        out.append(f"{o['emoji']} {o['name']} — pars à **{hm(r['leave'])}** · train {fmt_trip(r['trip'])}")
-    if not aller:
-        out.append("Aucun train direct trouvé 🤔")
-    out.append(f"\n🏠 **Retour** (fin à {cs[-1]['end']})")
-    for r in retour:
-        out.append(f"{r['origin']['name']} : " + (", ".join(f"{hm(t.dep)}→{hm(t.arr)}" for t in r["trips"]) or "—"))
-    return "\n".join(out)
+    out = [K.edt_card(day, cs, prefix)]
+    if cs:
+        aller = await trains.plan_aller(session, day, cs[0]["start"])
+        retour = await trains.plan_retour(session, day, cs[-1]["end"])
+        out += [K.aller_card(aller, cs[0]["start"]), K.retour_card(retour, f" · fin à {cs[-1]['end']}")]
+    return out
 
 
-async def msg_retour() -> str:
+async def retour_cards() -> list:
     res = await trains.plan_retour(session, now().date(), now().strftime("%H:%M"))
-    lines = [f"{r['origin']['name']} : " + (" · ".join(fmt_trip(t) for t in r["trips"]) or "—") for r in res]
-    return "🏠 **Trains retour**\n" + "\n".join(lines)
+    return [K.retour_card(res, " · prochains trains")]
 
 
-def next_school_day() -> dt.date:
-    today = now().date()
-    cs = courses(today)
-    return today if cs and now().strftime("%H:%M") < cs[0]["start"] else today + dt.timedelta(days=1)
+async def hero() -> dict:
+    """Données du prochain trajet pour le site (cache 2 min)."""
+    if state["hero"] and time.time() - state["hero_ts"] < 120:
+        return state["hero"]
+    day = next_school_day()
+    cs = courses(day)
+    data = {"day": K.jour(day), "today": day == now().date(), "first": cs[0] if cs else None, "options": []}
+    if cs and "PRIM_API_KEY" not in C.missing():
+        for i, r in enumerate(await trains.plan_aller(session, day, cs[0]["start"])):
+            t = r["trip"]
+            live = state["live"].get(t.key, {})
+            data["options"].append({
+                "origin": r["origin"]["name"], "emoji": r["origin"]["emoji"], "best": i == 0,
+                "leave": K.hm(r["leave"]), "dep": K.hm(t.dep), "base_dep": K.hm(t.base_dep),
+                "arr": K.hm(t.arr), "mission": t.mission, "delay": live.get("delay", t.delay),
+                "status": live.get("kind", "late" if t.delay >= C.get("DELAY_ALERT") else "ok"),
+            })
+    state["hero"], state["hero_ts"] = data, time.time()
+    return data
 
 
 # ---------- tâches ----------
@@ -145,26 +138,15 @@ async def do_ics_sync(force=False) -> int:
     changes, old, new = res
     if not changes:
         return 0
-    icons = {"add": "🆕", "del": "❌", "mod": "🔄"}
-    lines = ["⚠️ **Changement d'emploi du temps**"]
-    for d, chs in changes.items():
-        lines.append(f"**{jour(dt.date.fromisoformat(d))}**")
-        for kind, a, b in chs:
-            if kind == "add":
-                lines.append(f"{icons[kind]} {fmt_course(b)}")
-            elif kind == "del":
-                lines.append(f"{icons[kind]} ~~{fmt_course(a)}~~ (annulé)")
-            else:
-                lines.append(f"{icons[kind]} {a['summary']} : {a['start']}-{a['end']} {a['location']} → "
-                             f"**{b['start']}-{b['end']} {b['location']}**")
-    await send("\n".join(lines))
+    state["hero"] = None
+    await send([K.changes_card(changes)])
     for day in (now().date(), now().date() + dt.timedelta(days=1)):
         k = day.isoformat()
         f_old = (old.get(k) or [{}])[0].get("start")
         f_new = (new.get(k) or [{}])[0].get("start")
         if k in changes and f_old != f_new:
             state["plan"] = None
-            await send(await msg_plan(day, "🔁 **Nouveau trajet conseillé**\n"))
+            await send(await plan_cards(day, "🔁 Nouveau trajet · "))
     return len(changes)
 
 
@@ -175,7 +157,7 @@ async def recap_check():
         db.put(k, True)
         tomorrow = t.date() + dt.timedelta(days=1)
         if courses(tomorrow):
-            await send(await msg_plan(tomorrow, "🌙 **Demain**\n"))
+            await send(await plan_cards(tomorrow, "🌙 Demain · "))
 
 
 async def monitor():
@@ -185,7 +167,6 @@ async def monitor():
     plan = await get_plan(t_now.date())
     if not plan:
         return
-    status_txt = []
     for r in plan["aller"]:
         t, o = r["trip"], r["origin"]
         if not (r["leave"] - dt.timedelta(minutes=C.get("CHECK_BEFORE")) <= t_now <= t.base_dep + dt.timedelta(minutes=60)):
@@ -195,32 +176,20 @@ async def monitor():
             continue  # train parti
         delay = rt.delay if rt else 0
         kind = "cancel" if cancelled else ("late" if delay >= C.get("DELAY_ALERT") else "ok")
-        status_txt.append(f"{o['name']} {hm(t.base_dep)} : " +
-                          ("SUPPRIMÉ" if cancelled else f"+{delay} min" if delay else "à l'heure"))
+        state["live"][t.key] = {"kind": kind, "delay": delay}
         k = f"notif|{t.key}"
         last = db.get(k)
         if last and last["kind"] == kind and abs(last["delay"] - delay) < 3:
             continue
         db.put(k, {"kind": kind, "delay": delay})
+        state["hero"] = None
         db.log_delay(plan["day"], o["name"], t.mission, t.base_dep.isoformat(), delay, cancelled)
-        await ha_notify({"origin": o["name"], "status": kind, "delay": delay, "train": hm(t.base_dep)})
-        head = f"{o['emoji']} **{o['name']} {hm(t.base_dep)}** `{t.mission}`"
-        if kind == "ok":
-            await send(f"✅ {head} à l'heure — pars à **{hm(r['leave'])}**" if not last
-                       else f"✅ {head} est revenu à l'heure")
-            continue
-        if kind == "late":
-            msg = f"⏱️ {head} : **+{delay} min** → départ {hm(rt.dep)}, arrivée {hm(rt.arr)}"
-            msg += "\n⚠️ Tu risques d'être en retard en cours" if rt.arr > r["target"] else "\nÇa passe encore 👍"
-        else:
-            msg = f"🚫 {head} **SUPPRIMÉ**"
-        alts = await trains.alternatives(session, o, r["target"], t_now + dt.timedelta(minutes=o["access"]))
-        alts = [a for a in alts if a.key != t.key]
-        if alts:
-            msg += "\nAutres trains : " + " · ".join(fmt_trip(a) for a in alts)
-        await send(msg)
-    if status_txt:
-        state["status_text"] = " | ".join(status_txt)
+        await ha_notify({"origin": o["name"], "status": kind, "delay": delay, "train": K.hm(t.base_dep)})
+        alts = []
+        if kind != "ok":
+            alts = await trains.alternatives(session, o, r["target"], t_now + dt.timedelta(minutes=o["access"]))
+            alts = [a for a in alts if a.key != t.key]
+        await send([K.status_card(kind, o, t, rt, r["leave"], r["target"], alts, back=bool(last))])
 
     # Retour : 10 min avant la fin des cours (1 fois par jour)
     last_end = courses(t_now.date())[-1]["end"]
@@ -228,7 +197,7 @@ async def monitor():
     k = f"retour|{plan['day']}"
     if end - dt.timedelta(minutes=10) <= t_now <= end and not db.get(k):
         db.put(k, True)
-        await send(await msg_retour())
+        await send(await retour_cards())
 
 
 async def every(seconds, fn, name: str):
@@ -240,32 +209,34 @@ async def every(seconds, fn, name: str):
         await asyncio.sleep(seconds() if callable(seconds) else seconds)
 
 
-async def test_discord() -> str:
-    ok = await send("👋 Test : le webhook fonctionne !")
-    return "✅ Message envoyé sur Discord" if ok else "❌ Échec (vérifie l'URL du webhook, voir les logs)"
+# ---------- actions du site ----------
+async def test_discord() -> list:
+    c = K.card("👋 Test réussi", "green", "Le webhook fonctionne, les notifications arriveront ici.")
+    if not await send([c]):
+        raise RuntimeError("Échec de l'envoi : vérifie l'URL du webhook (voir les logs)")
+    return [c]
 
 
-async def test_prim() -> str:
-    lines = []
+async def test_prim() -> list:
+    fields = []
     for p in C.origins() + [C.dest()]:
-        sid = await trains.resolve(session, p)
-        lines.append(f"✅ {p['name']} → {sid}")
-    return "\n".join(lines)
+        fields.append((p["name"], f"`{await trains.resolve(session, p)}`", True))
+    return [K.card("🚆 API PRIM OK", "green", "Gares détectées :", fields)]
 
 
 def on_config_saved():
     db.put("stops", {})
-    state["plan"] = None
+    state.update(plan=None, hero=None)
 
 
-# ---------- démarrage ----------
 async def main():
     global session
     session = aiohttp.ClientSession()
     actions = {
         "sync": lambda: do_ics_sync(force=True),
-        "train": lambda: msg_plan(next_school_day()),
-        "retour": msg_retour,
+        "train": lambda: plan_cards(next_school_day()),
+        "retour": retour_cards,
+        "hero": hero,
         "send": send,
         "test_discord": test_discord,
         "test_prim": test_prim,
