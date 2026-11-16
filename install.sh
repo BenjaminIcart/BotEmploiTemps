@@ -7,6 +7,7 @@ DIR=/opt/edt-trains
 apt-get update -qq && apt-get install -y -qq git python3-venv tzdata >/dev/null
 ln -sf /usr/share/zoneinfo/Europe/Paris /etc/localtime
 id edt &>/dev/null || useradd -r -s /usr/sbin/nologin edt
+git config --global --add safe.directory $DIR
 if [ -d $DIR/.git ]; then git -C $DIR pull; else git clone -q $REPO $DIR; fi
 [ -f $DIR/.env ] || cp $DIR/.env.example $DIR/.env
 python3 -m venv $DIR/venv

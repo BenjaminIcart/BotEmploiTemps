@@ -26,5 +26,5 @@ Les boutons de test vérifient chaque élément. Tout est appliqué sans redéma
 
 ## Mise à jour
 ```bash
-pct exec <CTID> -- bash -c "cd /opt/edt-trains && git pull && systemctl restart edt-trains"
+pct exec <CTID> -- bash -c "cd /opt/edt-trains && git pull && chown -R edt:edt . && systemctl restart edt-trains"
 ```
