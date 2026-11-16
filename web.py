@@ -66,6 +66,11 @@ code{background:#ffffff14;padding:.05rem .35rem;border-radius:5px;font-size:.88e
 .toast{background:#30d15818;border:1px solid var(--green);border-radius:12px;padding:.8rem 1rem;margin-bottom:1rem}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1rem}
 .sk{color:var(--mute)}
+.tls{margin-top:.8rem;border-top:1px solid var(--line);padding-top:.6rem}
+.tl{display:flex;gap:.5rem;padding:.25rem .4rem;border-radius:8px;color:var(--mute);font-variant-numeric:tabular-nums}
+.tl span{width:1rem;text-align:center}.tl.main{background:#bf5af21f;color:var(--txt)}
+.tl em{color:var(--orange);font-style:normal;font-weight:700}.tl i{color:var(--red);font-style:normal;font-size:.85em}
+select{width:100%;padding:.7rem .8rem;border-radius:10px;border:1px solid var(--line);background:var(--card2);color:var(--txt);font-size:1rem}
 .nav{display:flex;gap:.1rem}.nav a{white-space:nowrap}
 @media(max-width:640px){.bar{gap:.5rem}.logo{flex:1 0 100%}.nav{flex:1;overflow-x:auto;scrollbar-width:none}
 .nav a{padding:.4rem .65rem;font-size:.88rem}.opt .big{font-size:2.2rem}main{padding-top:.8rem}}
@@ -83,12 +88,14 @@ fetch('/api/hero'+q).then(r=>r.json()).then(h=>{
   if(!h.first){el.innerHTML=s+'<p class=sk>Pas de cours à venir 🎉</p>';return}
   if(!h.options.length){el.innerHTML=s+'<p class=sk>Aucun train trouvé (clé PRIM configurée ?)</p>';return}
   s+='<div class=opts>'+h.options.map(o=>{
+    if(o.none) return `<div class="opt"><div class=o>${o.emoji} ${o.origin}</div><div class=big style="color:var(--red)">—</div><div class=tr>Aucun train N trouvé</div></div>`;
     const b=B[o.status]||B.ok, dl=o.delay>0?` +${o.delay} min`:'';
-    const dep=o.delay>0?`<s>${o.base_dep}</s> <b>${o.dep}</b>`:`<b>${o.dep}</b>`;
-    return `<div class="opt ${o.best?'best':''}">${o.best?'<span class="tag badge b-best">⭐ Conseillé</span>':''}
+    const list=(o.trains||[]).map(t=>`<div class="tl ${t.main?'main':''}"><span>${t.main?'▶':'·'}</span>`+
+      `<b>${t.dep}</b>${t.delay>0?` <em>+${t.delay}</em>`:''} → ${t.arr}${t.late&&!t.main?' <i>trop tard</i>':''}</div>`).join('');
+    return `<div class="opt ${o.best?'best':''}">${o.best?'<span class="tag badge b-best">⭐ Principal</span>':''}
       <div class=o>${o.emoji} ${o.origin}</div><div class=big>${o.leave}</div>
-      <div class=tr>Départ de chez toi</div><div class=row style="margin-top:.7rem;align-items:center">
-      <span class="badge ${b[0]}">${b[1]}${dl}</span><span class=tr>🚆 ${dep} → ${o.arr} <code>${o.mission}</code></span></div></div>`
+      <div class=tr>Départ de chez toi · <span class="badge ${b[0]}">${b[1]}${dl}</span></div>
+      <div class=tls>${list}</div></div>`
   }).join('')+'</div>';
   el.innerHTML=s;
 }).catch(()=>{document.getElementById('hero').innerHTML='<div class=sk>Erreur de chargement</div>'});
@@ -266,8 +273,12 @@ def make_app(state: dict, actions: dict) -> web.Application:
                 inp = f"<input type=password name={key} placeholder='{e(ph)}' autocomplete=off>"
             elif typ == "int":
                 inp = f"<input type=number min=0 name={key} value='{e(cur or str(C.get(key)))}'>"
+            elif typ.startswith("choice:"):
+                val = cur or C.get(key)
+                inp = f"<select name={key}>" + "".join(
+                    f"<option{' selected' if o == val else ''}>{e(o)}</option>" for o in typ[7:].split("|")) + "</select>"
             elif typ == "time":
-                inp = f"<input type=time name={key} value='{e(cur or C.get(key))}'>"
+                inp = f"<input type=time name={key} value='{e(C.get(key))}'>"
             else:
                 inp = f"<input type=text name={key} value='{e(cur)}' placeholder='{e(default or 'optionnel')}'>"
             wide = " style='grid-column:1/-1'" if typ == "secret" or key.endswith("URL") else ""

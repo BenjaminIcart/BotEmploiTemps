@@ -92,13 +92,29 @@ async def get_plan(day: dt.date):
     return state["plan"]
 
 
-async def plan_cards(day: dt.date, prefix="") -> list:
+def n_line_id(aller) -> str:
+    return next((t.line_id for r in aller for t in r.get("list", []) if t.line_id), "")
+
+
+async def get_backups(aller) -> list:
+    out = []
+    for r in aller:
+        out += await trains.backup_routes(session, r["origin"], r["target"], n_line_id(aller))
+    return out
+
+
+async def plan_cards(day: dt.date, prefix="", web=False) -> list:
     cs = courses(day)
     out = [K.edt_card(day, cs, prefix)]
     if cs:
         aller = await trains.plan_aller(session, day, cs[0]["start"])
         retour = await trains.plan_retour(session, day, cs[-1]["end"])
-        out += [K.aller_card(aller, cs[0]["start"]), K.retour_card(retour, f" · fin à {cs[-1]['end']}")]
+        problem = not aller or not aller[0]["trip"]
+        backups = await get_backups(aller) if (problem or web) else []
+        out.append(K.aller_card(aller, cs[0]["start"], backups if problem else None))
+        if web and not problem:
+            out.append(K.backups_card(backups, "🔀 Si le N ne passe pas"))
+        out.append(K.retour_card(retour, f" · fin à {cs[-1]['end']}"))
     return out
 
 
@@ -117,12 +133,19 @@ async def hero() -> dict:
     if cs and "PRIM_API_KEY" not in C.missing():
         for i, r in enumerate(await trains.plan_aller(session, day, cs[0]["start"])):
             t = r["trip"]
+            if not t:
+                data["options"].append({"origin": r["origin"]["name"], "emoji": r["origin"]["emoji"],
+                                        "best": i == 0, "none": True})
+                continue
             live = state["live"].get(t.key, {})
+            limit = r.get("latest_ok", r["target"])
             data["options"].append({
                 "origin": r["origin"]["name"], "emoji": r["origin"]["emoji"], "best": i == 0,
                 "leave": K.hm(r["leave"]), "dep": K.hm(t.dep), "base_dep": K.hm(t.base_dep),
                 "arr": K.hm(t.arr), "mission": t.mission, "delay": live.get("delay", t.delay),
                 "status": live.get("kind", "late" if t.delay >= C.get("DELAY_ALERT") else "ok"),
+                "trains": [{"dep": K.hm(x.dep), "arr": K.hm(x.arr), "delay": x.delay, "main": x.key == t.key,
+                            "late": x.arr > limit} for x in r["list"]],
             })
     state["hero"], state["hero_ts"] = data, time.time()
     return data
@@ -169,6 +192,8 @@ async def monitor():
         return
     for r in plan["aller"]:
         t, o = r["trip"], r["origin"]
+        if not t:
+            continue
         if not (r["leave"] - dt.timedelta(minutes=C.get("CHECK_BEFORE")) <= t_now <= t.base_dep + dt.timedelta(minutes=60)):
             continue
         rt, cancelled = await trains.check(session, t, o)
@@ -185,11 +210,13 @@ async def monitor():
         state["hero"] = None
         db.log_delay(plan["day"], o["name"], t.mission, t.base_dep.isoformat(), delay, cancelled)
         await ha_notify({"origin": o["name"], "status": kind, "delay": delay, "train": K.hm(t.base_dep)})
-        alts = []
+        alts, backups = [], []
         if kind != "ok":
             alts = await trains.alternatives(session, o, r["target"], t_now + dt.timedelta(minutes=o["access"]))
-            alts = [a for a in alts if a.key != t.key]
-        await send([K.status_card(kind, o, t, rt, r["leave"], r["target"], alts, back=bool(last))])
+            alts = [a for a in alts if a.key != t.key][:2]
+            if kind == "cancel" or rt.arr > r["target"]:
+                backups = await trains.backup_routes(session, o, r["target"], t.line_id)
+        await send([K.status_card(kind, o, t, rt, r["leave"], r["target"], alts, back=bool(last), backups=backups)])
 
     # Retour : 10 min avant la fin des cours (1 fois par jour)
     last_end = courses(t_now.date())[-1]["end"]
@@ -234,7 +261,7 @@ async def main():
     session = aiohttp.ClientSession()
     actions = {
         "sync": lambda: do_ics_sync(force=True),
-        "train": lambda: plan_cards(next_school_day()),
+        "train": lambda: plan_cards(next_school_day(), web=True),
         "retour": retour_cards,
         "hero": hero,
         "send": send,

@@ -21,10 +21,13 @@ FIELDS = [
     ("PRIM_API_KEY", "Clé API PRIM (IDFM)", "secret", "",
      "prim.iledefrance-mobilites.fr › abonnement « Calculateur IDFM – Accès générique (v2) »"),
     ("__Trajet", "", "", "", ""),
+    ("PREFERRED_ORIGIN", "Gare principale", "choice:Trappes|Coignières", "Trappes", "affichée en premier"),
+    ("USUAL_TRAPPES", "Train habituel à Trappes", "time", "07:16", "pris en priorité s'il arrive à temps (vide = auto)"),
+    ("USUAL_COIGNIERES", "Train habituel à Coignières", "time", "", "vide = auto"),
     ("ACCESS_COIGNIERES", "Maison → quai Coignières (min)", "int", "18", "à pied + marge"),
     ("ACCESS_TRAPPES", "Maison → quai Trappes (min)", "int", "22", "voiture + parking"),
     ("WALK_SCHOOL", "Montparnasse → lycée (min)", "int", "15", ""),
-    ("MARGIN", "Marge avant le cours (min)", "int", "5", ""),
+    ("MARGIN", "Marge avant le cours (min)", "int", "5", "le train habituel peut entamer cette marge"),
     ("__Notifications", "", "", "", ""),
     ("DELAY_ALERT", "Alerte à partir de (min de retard)", "int", "3", ""),
     ("CHECK_BEFORE", "Surveiller X min avant de partir", "int", "45", ""),
@@ -45,7 +48,11 @@ REQUIRED = ("ICS_URL", "DISCORD_WEBHOOK_URL", "PRIM_API_KEY")
 
 def get(key: str):
     import db  # import tardif (db importe config)
-    v = db.get("settings", {}).get(key) or os.getenv(key) or _DEFAULTS.get(key, "")
+    saved = db.get("settings", {})
+    if key in saved and (saved[key] or _TYPES.get(key) in ("time", "text")):
+        v = saved[key]  # une valeur vidée volontairement reste vide
+    else:
+        v = os.getenv(key) or _DEFAULTS.get(key, "")
     v = str(v).strip().strip('"\'')
     if key == "ICS_URL" and v.startswith("webcal://"):
         v = "https://" + v[len("webcal://"):]
@@ -78,9 +85,9 @@ def missing() -> list[str]:
 def origins():
     return [
         {"name": "Coignières", "query": "Coignières", "id": get("STOP_COIGNIERES"),
-         "access": get("ACCESS_COIGNIERES"), "emoji": "🚶"},
+         "access": get("ACCESS_COIGNIERES"), "emoji": "🚶", "usual": get("USUAL_COIGNIERES")},
         {"name": "Trappes", "query": "Trappes", "id": get("STOP_TRAPPES"),
-         "access": get("ACCESS_TRAPPES"), "emoji": "🚗"},
+         "access": get("ACCESS_TRAPPES"), "emoji": "🚗", "usual": get("USUAL_TRAPPES")},
     ]
 
 
