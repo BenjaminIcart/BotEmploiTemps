@@ -46,13 +46,22 @@ def route_str(r):
 
 
 # ---------- cards ----------
+def course_row(c):
+    meta = " · ".join(x for x in (c.get("type"), "*en ligne*" if c.get("virtual") else c.get("location")) if x)
+    return f"`{c['start']}–{c['end']}`  **{c['summary']}**" + (f"  ·  {meta}" if meta else "")
+
+
 def edt_card(day, courses, title_prefix=""):
     if not courses:
-        return card(f"{title_prefix}📅 {jour(day)}", "grey", "Pas cours 🎉")
-    fields = [(f"🕗 {c['start']} → {c['end']}", f"**{c['summary']}**" + (f"\n📍 {c['location']}" if c["location"] else ""), True)
-              for c in courses]
-    return card(f"{title_prefix}📅 {jour(day)}", "blue", fields=fields,
-                footer=f"{len(courses)} cours · de {courses[0]['start']} à {courses[-1]['end']}")
+        return card(f"{title_prefix}{jour(day)}", "grey", "Pas cours")
+    onsite = [c for c in courses if not c.get("virtual")]
+    online = len(courses) - len(onsite)
+    foot = []
+    if onsite:
+        foot.append(f"Sur place {onsite[0]['start']} → {onsite[-1]['end']}")
+    if online:
+        foot.append(f"{online} en ligne")
+    return card(f"{title_prefix}{jour(day)}", "blue", "\n".join(map(course_row, courses)), footer=" · ".join(foot))
 
 
 def trains_list(r):
@@ -70,47 +79,45 @@ def trains_list(r):
     return "\n".join(lines)
 
 
-def chain_str(r, school_name, stop_name):
-    t, ch = r["trip"], r.get("chain")
-    if not ch:
-        return None
-    lines = [f"🚆 **{hm(t.dep)}** {r['origin']['name']} → {hm(t.arr)} Montparnasse · N"]
-    if ch["metro"]:
-        m = ch["metro"]
-        lines.append(f"🚇 **{hm(m['dep'])}** Montparnasse → {hm(m['arr'])} {stop_name} · M{m['line']}")
-    else:
-        lines.append(f"🚇 Métro 6 → {stop_name} (horaire estimé)")
-    late = ch["school_arr"] > r["course"]
-    lines.append(f"🚶 🏫 **{school_name} à {hm(ch['school_arr'])}**" +
-                 (" ⚠️ après le début du cours" if late else f" · cours à {hm(r['course'])} ✅"))
-    return "\n".join(lines)
-
-
 def aller_card(aller, first_start, backups=None, school_name="École", stop_name="Bir-Hakeim"):
+    if not aller or not aller[0]["trip"]:
+        f = [("Sans le N", "\n".join(route_str(b) for b in backups), False)] if backups else None
+        return card("Aller · aucun train N trouvé", "orange", f"1er cours sur place à {first_start}", f)
+    r, t = aller[0], aller[0]["trip"]
+    o, ch = r["origin"], r.get("chain")
+    dep = f"**{hm(t.dep)}**" + (f" (+{t.delay})" if t.delay > 0 else "")
+    lines = [f"{dep} {o['name']} → Montparnasse {hm(t.arr)}"]
+    late = False
+    if ch:
+        if ch["metro"]:
+            lines.append(f"**{hm(ch['metro']['dep'])}** Métro {ch['metro']['line']} → {stop_name} {hm(ch['metro']['arr'])}")
+        late = ch["school_arr"] > r["course"]
+        lines.append(f"**{hm(ch['school_arr'])}** {school_name} · cours à {hm(r['course'])}")
+    if late:
+        lines.append("⚠️ Arrivée après le début du cours")
+    others = [x for x in r["list"] if x.key != t.key]
     fields = []
-    for i, r in enumerate(aller):
-        o = r["origin"]
-        name = f"{o['emoji']} {o['name']}" + (" ⭐" if i == 0 else "")
-        if not r["trip"]:
-            fields.append((name, "❌ Aucun train N trouvé", True))
-            continue
-        fields.append((name, f"🏠 Pars à **{hm(r['leave'])}**\n" + trains_list(r), True))
-    if aller and aller[0]["trip"]:
-        cs = chain_str(aller[0], school_name, stop_name)
-        if cs:
-            fields.append(("🧭 Trajet complet", cs, False))
+    if others:
+        fields.append(("Autres trains", " · ".join(
+            hm(x.dep) + (" (trop tard)" if x.arr > r.get("latest_ok", r["target"]) else "") for x in others), True))
+    for r2 in aller[1:]:
+        if r2["trip"]:
+            fields.append((r2["origin"]["name"], f"pars {hm(r2['leave'])} · train {hm(r2['trip'].dep)}", True))
     if backups:
-        fields.append(("🔀 Itinéraires sans le N", "\n".join(route_str(b) for b in backups), False))
-    color = "purple" if all(r["trip"] for r in aller) and aller else "orange"
-    tgt = aller[0]["target"] if aller else None
-    return card(f"🚆 Aller · 1er cours à {first_start}", color, fields=fields or [("—", "Aucun train trouvé 🤔", False)],
-                footer=(f"▶️ train conseillé · ▫️ avant / après · arrivée idéale avant {hm(tgt)}" if tgt else None))
+        fields.append(("Sans le N", "\n".join(route_str(b) for b in backups), False))
+    return card(f"Départ {hm(r['leave'])} · {o['name']}", "orange" if late or backups else "purple",
+                "\n".join(lines), fields)
 
 
 def retour_card(retour, subtitle=""):
-    fields = [(f"{r['origin']['emoji']} → {r['origin']['name']}",
-               "\n".join(trip_str(t) for t in r["trips"]) or "—", True) for r in retour]
-    return card(f"🏠 Retour{subtitle}", "teal", fields=fields)
+    fields = [(r["origin"]["name"], "\n".join(trip_str(t) for t in r["trips"]) or "—", True) for r in retour]
+    return card(f"Retour{subtitle}", "teal", "Trains N à Montparnasse que tu peux attraper (métro depuis l'école compris)", fields)
+
+
+def virtual_card(c):
+    return card(f"Cours en ligne à {c['start']}", "teal",
+                f"**{c['summary']}**" + (f" · {c['type']}" if c.get("type") else "") +
+                f"\n{c['start']} – {c['end']}\n\nPense à ouvrir l'app pour te mettre présent.")
 
 
 def backups_card(backups, title="🔀 Autres itinéraires (sans le N)"):

@@ -29,6 +29,11 @@ def courses(day):
     return db.get("edt", {}).get(day.isoformat(), [])
 
 
+def onsite(day):
+    """Cours sur place uniquement (les cours en ligne ne demandent pas de trajet)."""
+    return [c for c in courses(day) if not c.get("virtual")]
+
+
 # ---------- Discord ----------
 async def send(embeds: list, content: str | None = None) -> bool:
     """Envoie des cards sur Discord via le webhook (10 cards max par message)."""
@@ -70,18 +75,18 @@ async def ha_notify(payload: dict):
 # ---------- plans ----------
 def next_school_day() -> dt.date:
     today = now().date()
-    cs = courses(today)
+    cs = onsite(today)
     if cs and now().strftime("%H:%M") < cs[0]["start"]:
         return today
-    for i in range(1, 8):  # prochain jour avec cours (saute le week-end)
+    for i in range(1, 8):  # prochain jour avec cours sur place (saute le week-end)
         d = today + dt.timedelta(days=i)
-        if courses(d):
+        if onsite(d):
             return d
     return today + dt.timedelta(days=1)
 
 
 async def get_plan(day: dt.date):
-    cs = courses(day)
+    cs = onsite(day)
     if not cs:
         return None
     p = state["plan"]
@@ -108,8 +113,8 @@ async def get_backups(aller) -> list:
 
 
 async def plan_cards(day: dt.date, prefix="", web=False) -> list:
-    cs = courses(day)
-    out = [K.edt_card(day, cs, prefix)]
+    out = [K.edt_card(day, courses(day), prefix)]
+    cs = onsite(day)
     if cs:
         aller = await trains.plan_aller(session, day, cs[0]["start"])
         retour = await trains.plan_retour(session, day, cs[-1]["end"])
@@ -123,9 +128,9 @@ async def plan_cards(day: dt.date, prefix="", web=False) -> list:
     return out
 
 
-async def retour_cards() -> list:
-    res = await trains.plan_retour(session, now().date(), now().strftime("%H:%M"))
-    return [K.retour_card(res, " · prochains trains")]
+async def retour_cards(end: str | None = None) -> list:
+    res = await trains.plan_retour(session, now().date(), end or now().strftime("%H:%M"))
+    return [K.retour_card(res, f" · fin à {end}" if end else "")]
 
 
 async def hero() -> dict:
@@ -133,7 +138,7 @@ async def hero() -> dict:
     if state["hero"] and time.time() - state["hero_ts"] < 120:
         return state["hero"]
     day = next_school_day()
-    cs = courses(day)
+    cs = onsite(day)
     data = {"day": K.jour(day), "today": day == now().date(), "first": cs[0] if cs else None, "options": []}
     if cs and "PRIM_API_KEY" not in C.missing():
         for i, r in enumerate(await trains.plan_aller(session, day, cs[0]["start"])):
@@ -181,7 +186,7 @@ async def do_ics_sync(force=False) -> int:
         f_new = (new.get(k) or [{}])[0].get("start")
         if k in changes and f_old != f_new:
             state["plan"] = None
-            await send(await plan_cards(day, "🔁 Nouveau trajet · "))
+            await send(await plan_cards(day, "Nouveau trajet · "))
     return len(changes)
 
 
@@ -192,7 +197,7 @@ async def recap_check():
         db.put(k, True)
         tomorrow = t.date() + dt.timedelta(days=1)
         if courses(tomorrow):
-            await send(await plan_cards(tomorrow, "🌙 Demain · "))
+            await send(await plan_cards(tomorrow, "Demain · "))
 
 
 async def monitor():
@@ -235,13 +240,27 @@ async def monitor():
         await send([K.status_card(kind, o, t, rt, r["leave"], r.get("latest_ok", r["target"]), alts,
                                   back=bool(last), backups=backups, school_eta=eta)])
 
-    # Retour : 10 min avant la fin des cours (1 fois par jour)
-    last_end = courses(t_now.date())[-1]["end"]
+    # Retour : à la fin du dernier cours SUR PLACE (1 fois par jour)
+    last_end = onsite(t_now.date())[-1]["end"]
     end = dt.datetime.combine(t_now.date(), dt.time(*map(int, last_end.split(":"))), C.TZ)
     k = f"retour|{plan['day']}"
-    if end - dt.timedelta(minutes=10) <= t_now <= end and not db.get(k):
+    if end - dt.timedelta(minutes=2) <= t_now <= end + dt.timedelta(minutes=20) and not db.get(k):
         db.put(k, True)
-        await send(await retour_cards())
+        await send(await retour_cards(last_end))
+
+
+async def virtual_check():
+    """Rappel avant chaque cours en ligne (pour se mettre présent)."""
+    t_now = now()
+    before = C.get("VIRTUAL_NOTIFY")
+    for c in courses(t_now.date()):
+        if not c.get("virtual"):
+            continue
+        start = dt.datetime.combine(t_now.date(), dt.time(*map(int, c["start"].split(":"))), C.TZ)
+        k = f"virtual|{t_now.date()}|{c['start']}|{c['summary']}"
+        if start - dt.timedelta(minutes=before) <= t_now <= start + dt.timedelta(minutes=10) and not db.get(k):
+            db.put(k, True)
+            await send([K.virtual_card(c)])
 
 
 async def every(seconds, fn, name: str):
@@ -279,6 +298,7 @@ async def main():
     actions = {
         "sync": lambda: do_ics_sync(force=True),
         "train": lambda: plan_cards(next_school_day(), web=True),
+        "train_discord": lambda: plan_cards(next_school_day()),
         "retour": retour_cards,
         "hero": hero,
         "send": send,
@@ -293,6 +313,7 @@ async def main():
     await asyncio.gather(
         every(lambda: C.get("ICS_REFRESH_MIN") * 60, do_ics_sync, "ics"),
         every(60, recap_check, "recap"),
+        every(60, virtual_check, "virtual"),
         every(180, monitor, "monitor"),
     )
 

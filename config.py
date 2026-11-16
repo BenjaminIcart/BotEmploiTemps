@@ -39,6 +39,7 @@ FIELDS = [
     ("DELAY_ALERT", "Alerte à partir de (min de retard)", "int", "3", ""),
     ("CHECK_BEFORE", "Surveiller X min avant de partir", "int", "45", ""),
     ("RECAP_HOUR", "Heure du récap du lendemain", "time", "20:00", ""),
+    ("VIRTUAL_NOTIFY", "Rappel cours en ligne (min avant)", "int", "5", "pour penser à se mettre présent"),
     ("ICS_REFRESH_MIN", "Actualisation de l'EDT (min)", "int", "15", ""),
     ("HA_WEBHOOK_URL", "Webhook Home Assistant (optionnel)", "text", "",
      "ex : http://IP_HA:8123/api/webhook/train_retard"),

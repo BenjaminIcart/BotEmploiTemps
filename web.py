@@ -47,6 +47,7 @@ padding:.6rem 1rem;font-weight:600;font-size:.95rem;cursor:pointer}
 .day .t{font-weight:700;margin-bottom:.5rem;display:flex;justify-content:space-between}
 .day .t span{color:var(--mute);font-weight:500;font-size:.85rem}
 .cr{border-left:4px solid var(--c);background:var(--card2);border-radius:8px;padding:.45rem .6rem;margin:.35rem 0}
+.cr.online{border-left-style:dashed;opacity:.75}
 .cr b{display:block;font-size:.93rem}.cr small{color:var(--mute)}.free{color:var(--mute);padding:.6rem 0}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.7rem}
 .stat .v{font-size:1.9rem;font-weight:800}.stat .l{color:var(--mute);font-size:.88rem}
@@ -198,8 +199,9 @@ def make_app(state: dict, actions: dict) -> web.Application:
             if not cs:
                 out.append("<div class=free>Pas cours 🎉</div>")
             for c in cs:
-                out.append(f"<div class=cr style='--c:{_color(c['summary'])}'><b>{e(c['summary'])}</b>"
-                           f"<small>{c['start']} – {c['end']}{' · ' + e(c['location']) if c['location'] else ''}</small></div>")
+                meta = " · ".join(x for x in (c.get("type"), c.get("location")) if x)
+                out.append(f"<div class='cr{' online' if c.get('virtual') else ''}' style='--c:{_color(c['summary'])}'>"
+                           f"<b>{e(c['summary'])}</b><small>{c['start']} – {c['end']}{' · ' + e(meta) if meta else ''}</small></div>")
             out.append("</div>")
         out.append("</div>")
 
@@ -237,7 +239,8 @@ def make_app(state: dict, actions: dict) -> web.Application:
                 cs = await actions[name]()
                 sent = ""
                 if request.query.get("discord") == "1":
-                    sent = ("<div class=toast>✅ Envoyé sur Discord</div>" if await actions["send"](cs)
+                    to_send = await actions[name + "_discord"]() if name + "_discord" in actions else cs
+                    sent = ("<div class=toast>✅ Envoyé sur Discord</div>" if await actions["send"](to_send)
                             else "<div class='box warn'>❌ Envoi Discord impossible (webhook ?)</div>")
             except Exception as ex:
                 return err(ex, request, active)
