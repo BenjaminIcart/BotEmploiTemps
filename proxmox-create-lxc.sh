@@ -15,8 +15,12 @@ pct create "$CTID" "local:vztmpl/$TPL" \
   --rootfs "$STORAGE:4" --net0 name=eth0,bridge=$BRIDGE,ip=dhcp \
   --unprivileged 1 --features nesting=1 --onboot 1 --timezone Europe/Paris
 pct start "$CTID"
-sleep 8
-pct exec "$CTID" -- bash -c "apt-get update -qq && apt-get install -y -qq curl >/dev/null && \
+echo "⏳ Attente du réseau..."
+for i in $(seq 1 30); do
+  pct exec "$CTID" -- getent hosts deb.debian.org >/dev/null 2>&1 && break
+  sleep 2
+done
+pct exec "$CTID" -- bash -c "export LANG=C.UTF-8 LC_ALL=C.UTF-8; apt-get update -qq && apt-get install -y -qq curl >/dev/null && \
   bash <(curl -fsSL https://raw.githubusercontent.com/BenjaminIcart/BotEmploiTemps/main/install.sh)"
 IP=$(pct exec "$CTID" -- hostname -I | awk '{print $1}')
 echo ""

@@ -1,6 +1,7 @@
 #!/bin/bash
 # Installation DANS le container (Debian), en root
 set -e
+export LANG=C.UTF-8 LC_ALL=C.UTF-8 DEBIAN_FRONTEND=noninteractive
 REPO=https://github.com/BenjaminIcart/BotEmploiTemps.git
 DIR=/opt/edt-trains
 apt-get update -qq && apt-get install -y -qq git python3-venv tzdata >/dev/null
