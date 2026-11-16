@@ -115,7 +115,7 @@ async def plan_aller(session, day: dt.date, first_start: str) -> list[dict]:
     latest_ok = course - dt.timedelta(minutes=C.school_delay())  # limite absolue (sans marge)
     dest = await resolve(session, C.dest())
     pref = C.preferred_origin(first_start)
-    early = pref == C.get("EARLY_ORIGIN") and first_start <= (C.get("EARLY_LIMIT") or "08:00")
+    early = C.is_early(first_start)
     ahead = 0 if early else C.get("LATE_AHEAD")
     res = []
     for o in C.origins():
@@ -149,8 +149,9 @@ async def plan_aller(session, day: dt.date, first_start: str) -> list[dict]:
         res.append({"origin": o, "trip": main, "target": target, "latest_ok": latest_ok, "course": course,
                     "leave": main.dep - dt.timedelta(minutes=o["access"]), "list": before + [main] + after})
     res.sort(key=lambda r: r["origin"]["name"] != pref)
-    if res and res[0]["trip"]:  # trajet complet (métro + marche) pour la gare principale
-        res[0]["chain"] = await chain(session, res[0]["trip"].arr)
+    for r in res:  # trajet complet (métro + marche) pour chaque gare
+        if r["trip"]:
+            r["chain"] = await chain(session, r["trip"].arr)
     return res
 
 

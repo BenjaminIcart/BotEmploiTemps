@@ -102,7 +102,7 @@ fetch('/api/hero'+q).then(r=>r.json()).then(h=>{
         (o.chain.metro?`🚇 <b>${o.chain.metro.dep}</b> M${o.chain.metro.line} → ${o.chain.metro.arr} ${o.chain.stop}<br>`:`🚇 Métro 6 → ${o.chain.stop} (estimé)<br>`)+
         `🚶 🏫 <b>${o.chain.school} à ${o.chain.school_arr}</b> ${o.chain.late?'⚠️':'✅'}</div>`:''}</div>`
   }).join('')+'</div>';
-  if(h.png) s+=`<img class=tlimg src="/trajet.png${q}${q?'&':'?'}t=${Date.now()}">`;
+  for(let i=0;i<(h.png||0);i++) s+=`<img class=tlimg src="/trajet.png${q}${q?'&':'?'}i=${i}&t=${Date.now()}">`;
   el.innerHTML=s;
 }).catch(()=>{document.getElementById('hero').innerHTML='<div class=sk>Erreur de chargement</div>'});
 </script>"""
@@ -231,16 +231,17 @@ def make_app(state: dict, actions: dict) -> web.Application:
         out.append(HERO_JS)
         return page("".join(out), request, "/")
 
-    async def trajet_png(_):
-        png = state.get("hero_png")
-        if not png:
+    async def trajet_png(request):
+        pngs = state.get("hero_png") or []
+        i = int(request.query.get("i", "0") or 0)
+        if i >= len(pngs):
             raise web.HTTPNotFound()
-        return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
+        return web.Response(body=pngs[i], content_type="image/png", headers={"Cache-Control": "no-store"})
 
     async def api_hero(_):
         try:
             h = dict(await actions["hero"]())
-            h["png"] = bool(state.get("hero_png"))
+            h["png"] = len(state.get("hero_png") or [])
             return web.json_response(h)
         except Exception as ex:
             return web.json_response({"error": str(ex)})

@@ -21,7 +21,7 @@ FIELDS = [
     ("PRIM_API_KEY", "Clé API PRIM (IDFM)", "secret", "",
      "prim.iledefrance-mobilites.fr › abonnement « Calculateur IDFM – Accès générique (v2) »"),
     ("__Trajet", "", "", "", ""),
-    ("EARLY_LIMIT", "Cours tôt : 1er cours à … ou avant", "time", "08:00", "au-delà = journée « tardive »"),
+    ("EARLY_BEFORE", "Cours tôt : 1er cours avant", "time", "09:00", "ex. 09:00 → un cours à 8h ou 8h30 = Trappes"),
     ("EARLY_ORIGIN", "Gare si cours tôt", "choice:Trappes|Coignières", "Trappes", ""),
     ("LATE_ORIGIN", "Gare si cours plus tard", "choice:Coignières|Trappes", "Coignières", ""),
     ("LATE_AHEAD", "Trains d'avance si cours plus tard", "int", "1", "0 = le dernier train qui passe"),
@@ -107,8 +107,11 @@ def dest():
 
 
 def preferred_origin(first_start: str) -> str:
-    early = first_start <= (get("EARLY_LIMIT") or "08:00")
-    return get("EARLY_ORIGIN") if early else get("LATE_ORIGIN")
+    return get("EARLY_ORIGIN") if is_early(first_start) else get("LATE_ORIGIN")
+
+
+def is_early(first_start: str) -> bool:
+    return first_start < (get("EARLY_BEFORE") or "09:00")
 
 
 def school_delay() -> int:

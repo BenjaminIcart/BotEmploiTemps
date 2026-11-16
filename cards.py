@@ -109,15 +109,33 @@ def aller_card(aller, first_start, backups=None, school_name="École", stop_name
     if others:
         fields.append(("Autres trains", " · ".join(
             hm(x.dep) + (" (trop tard)" if x.arr > r.get("latest_ok", r["target"]) else "") for x in others), True))
-    for r2 in aller[1:]:
-        if r2["trip"]:
-            fields.append((r2["origin"]["name"], f"pars {hm(r2['leave'])} · train {hm(r2['trip'].dep)}", True))
     if backups:
         fields.append(("Sans le N", "\n".join(route_str(b) for b in backups), False))
     c = card(f"Départ {hm(r['leave'])} · {o['name']}", "orange" if late or backups else "purple",
              "\n".join(lines), fields)
     if png:
         c["_png"] = png
+    return c
+
+
+def alt_card(r, school_name="École", stop_name="Bir-Hakeim"):
+    """Autre gare (Coignières si Trappes conseillé, et inversement), avec sa propre frise."""
+    t = r.get("trip")
+    if not t:
+        return card(f"Autre option · {r['origin']['name']}", "grey", "Aucun train N trouvé")
+    ch = r.get("chain")
+    desc = f"Pars à **{hm(r['leave'])}** · train **{hm(t.dep)}**" + (f" (+{t.delay})" if t.delay > 0 else "")
+    if ch:
+        desc += f" · {school_name} à {hm(ch['school_arr'])}" + (" ⚠️" if ch["school_arr"] > r["course"] else "")
+    c = card(f"Autre option · {r['origin']['name']}", "grey", desc)
+    try:
+        import timeline
+        tl = timeline.from_plan(r, school_name, stop_name)
+        if tl:
+            tl["title"] = "Autre option · " + tl["title"]
+            c["_png"] = timeline.render(tl)
+    except Exception:
+        pass
     return c
 
 

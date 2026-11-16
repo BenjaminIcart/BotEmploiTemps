@@ -140,6 +140,8 @@ async def plan_cards(day: dt.date, prefix="", web=False) -> list:
         backups = await get_backups(aller) if (problem or web) else []
         out.append(K.aller_card(aller, cs[0]["start"], backups if problem else None,
                                 C.get("SCHOOL_NAME"), C.metro_stop()["name"]))
+        for r2 in aller[1:]:
+            out.append(K.alt_card(r2, C.get("SCHOOL_NAME"), C.metro_stop()["name"]))
         if web and not problem:
             out.append(K.backups_card(backups, "🔀 Si le N ne passe pas"))
         out.append(K.retour_card(retour, f" · fin à {cs[-1]['end']}"))
@@ -162,12 +164,17 @@ async def hero() -> dict:
     data = {"day": K.jour(day), "today": day == now().date(), "first": cs[0] if cs else None, "options": []}
     if cs and "PRIM_API_KEY" not in C.missing():
         aller = await trains.plan_aller(session, day, cs[0]["start"])
-        state["hero_png"] = None
-        if aller and aller[0]["trip"]:
+        state["hero_png"] = []
+        for i, r in enumerate(aller):
+            if not r["trip"]:
+                continue
             try:
                 import timeline
-                tl = timeline.from_plan(aller[0], C.get("SCHOOL_NAME"), C.metro_stop()["name"])
-                state["hero_png"] = timeline.render(tl) if tl else None
+                tl = timeline.from_plan(r, C.get("SCHOOL_NAME"), C.metro_stop()["name"])
+                if tl:
+                    if i:
+                        tl["title"] = "Autre option · " + tl["title"]
+                    state["hero_png"].append(timeline.render(tl))
             except Exception as e:
                 log.warning("Frise : %s", e)
         for i, r in enumerate(aller):
