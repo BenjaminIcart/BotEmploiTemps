@@ -6,8 +6,8 @@ STORAGE=${STORAGE:-local-lvm}
 BRIDGE=${BRIDGE:-vmbr0}
 
 pveam update >/dev/null
-TPL=$(pveam available --section system | awk '/debian-13-standard/ {print $2}' | sort -V | tail -1)
-[ -z "$TPL" ] && TPL=$(pveam available --section system | awk '/debian-12-standard/ {print $2}' | sort -V | tail -1)
+TPL=$(pveam available --section system | awk '/debian-13-standard.*amd64/ {print $2}' | sort -V | tail -1)
+[ -z "$TPL" ] && TPL=$(pveam available --section system | awk '/debian-12-standard.*amd64/ {print $2}' | sort -V | tail -1)
 pveam list local | grep -q "$TPL" || pveam download local "$TPL"
 
 pct create "$CTID" "local:vztmpl/$TPL" \
