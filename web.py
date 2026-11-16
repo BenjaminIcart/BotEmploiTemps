@@ -66,6 +66,7 @@ code{background:#ffffff14;padding:.05rem .35rem;border-radius:5px;font-size:.88e
 .toast{background:#30d15818;border:1px solid var(--green);border-radius:12px;padding:.8rem 1rem;margin-bottom:1rem}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1rem}
 .sk{color:var(--mute)}
+.chain{margin-top:.6rem;padding:.6rem .7rem;border-radius:10px;background:#40c8e014;color:var(--txt);line-height:1.7;font-size:.93rem}
 .tls{margin-top:.8rem;border-top:1px solid var(--line);padding-top:.6rem}
 .tl{display:flex;gap:.5rem;padding:.25rem .4rem;border-radius:8px;color:var(--mute);font-variant-numeric:tabular-nums}
 .tl span{width:1rem;text-align:center}.tl.main{background:#bf5af21f;color:var(--txt)}
@@ -95,7 +96,9 @@ fetch('/api/hero'+q).then(r=>r.json()).then(h=>{
     return `<div class="opt ${o.best?'best':''}">${o.best?'<span class="tag badge b-best">⭐ Principal</span>':''}
       <div class=o>${o.emoji} ${o.origin}</div><div class=big>${o.leave}</div>
       <div class=tr>Départ de chez toi · <span class="badge ${b[0]}">${b[1]}${dl}</span></div>
-      <div class=tls>${list}</div></div>`
+      <div class=tls>${list}</div>${o.chain?`<div class=chain>`+
+        (o.chain.metro?`🚇 <b>${o.chain.metro.dep}</b> M${o.chain.metro.line} → ${o.chain.metro.arr} ${o.chain.stop}<br>`:`🚇 Métro 6 → ${o.chain.stop} (estimé)<br>`)+
+        `🚶 🏫 <b>${o.chain.school} à ${o.chain.school_arr}</b> ${o.chain.late?'⚠️':'✅'}</div>`:''}</div>`
   }).join('')+'</div>';
   el.innerHTML=s;
 }).catch(()=>{document.getElementById('hero').innerHTML='<div class=sk>Erreur de chargement</div>'});

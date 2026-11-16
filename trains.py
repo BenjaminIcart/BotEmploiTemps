@@ -100,7 +100,7 @@ async def journeys(session, frm, to, when, arrival, origin_name, count=4) -> lis
 
 def target_arrival(day: dt.date, first_start: str) -> dt.datetime:
     h, m = map(int, first_start.split(":"))
-    return dt.datetime.combine(day, dt.time(h, m), TZ) - dt.timedelta(minutes=C.get("WALK_SCHOOL") + C.get("MARGIN"))
+    return dt.datetime.combine(day, dt.time(h, m), TZ) - dt.timedelta(minutes=C.school_delay() + C.get("MARGIN"))
 
 
 def _hm(d):
@@ -112,7 +112,7 @@ async def plan_aller(session, day: dt.date, first_start: str) -> list[dict]:
     target = target_arrival(day, first_start)
     h, m = map(int, first_start.split(":"))
     course = dt.datetime.combine(day, dt.time(h, m), TZ)
-    latest_ok = course - dt.timedelta(minutes=C.get("WALK_SCHOOL"))  # limite absolue (sans marge)
+    latest_ok = course - dt.timedelta(minutes=C.school_delay())  # limite absolue (sans marge)
     dest = await resolve(session, C.dest())
     res = []
     for o in C.origins():
@@ -134,26 +134,84 @@ async def plan_aller(session, day: dt.date, first_start: str) -> list[dict]:
         if main is None and trips:
             main = trips[-1]
         if main is None:
-            res.append({"origin": o, "trip": None, "target": target, "leave": None, "list": []})
+            res.append({"origin": o, "trip": None, "target": target, "course": course, "leave": None, "list": []})
             continue
         before = [t for t in trips if t.dep < main.dep][-1:]
         after = await journeys(session, oid, dest, main.base_dep + dt.timedelta(minutes=1), arrival=False,
                                origin_name=o["name"], count=3)
         after = [t for t in after if t.dep > main.dep and t.key != main.key][:1]
-        res.append({"origin": o, "trip": main, "target": target, "latest_ok": latest_ok,
+        res.append({"origin": o, "trip": main, "target": target, "latest_ok": latest_ok, "course": course,
                     "leave": main.dep - dt.timedelta(minutes=o["access"]), "list": before + [main] + after})
     pref = C.get("PREFERRED_ORIGIN")
     res.sort(key=lambda r: r["origin"]["name"] != pref)
+    if res and res[0]["trip"]:  # trajet complet (métro + marche) pour la gare principale
+        res[0]["chain"] = await chain(session, res[0]["trip"].arr)
     return res
+
+
+async def metro_leg(session, arr_montparnasse: dt.datetime) -> dict | None:
+    """Prochain métro 6 Montparnasse -> station d'arrivée après la correspondance."""
+    try:
+        frm = await resolve(session, C.dest())
+        to = await resolve(session, C.metro_stop())
+        start = arr_montparnasse + dt.timedelta(minutes=C.get("TRANSFER_MONTPARNASSE"))
+        data = await _get(session, "/journeys", {"from": frm, "to": to, "datetime": _fmt(start),
+                                                  "datetime_represents": "departure", "max_nb_transfers": 0,
+                                                  "count": 3, "data_freshness": "realtime"})
+    except Exception as e:
+        log.warning("Métro : %s", e)
+        return None
+    best = None
+    for j in data.get("journeys", []):
+        pt = [s for s in j.get("sections", []) if s.get("type") == "public_transport"]
+        if len(pt) != 1:
+            continue
+        di = pt[0].get("display_informations", {})
+        leg = {"dep": _nv(pt[0]["departure_date_time"]), "arr": _nv(pt[0]["arrival_date_time"]),
+               "line": di.get("code") or "6"}
+        if leg["line"] == "6":
+            return leg
+        best = best or leg
+    return best
+
+
+async def chain(session, arr_montparnasse: dt.datetime) -> dict:
+    """Trajet complet après le train : métro (temps réel si dispo) puis marche jusqu'à l'école."""
+    m = await metro_leg(session, arr_montparnasse)
+    if m:
+        school_arr = m["arr"] + dt.timedelta(minutes=C.get("WALK_END"))
+    else:
+        school_arr = arr_montparnasse + dt.timedelta(minutes=C.school_delay())
+    return {"metro": m, "school_arr": school_arr, "estimated": m is None}
+
+
+async def resolve_address(session, place: dict) -> str:
+    """Adresse -> coordonnées Navitia (lon;lat), mises en cache."""
+    cache = db.get("stops", {})
+    key = "addr|" + place["query"]
+    if key in cache:
+        return cache[key]
+    data = await _get(session, "/places", {"q": place["query"], "type[]": "address", "count": 1})
+    pl = data.get("places", [])
+    if not pl:
+        raise RuntimeError(f"Adresse introuvable : {place['query']}")
+    cid = pl[0]["id"]
+    log.info("Adresse '%s' -> %s", place["query"], cid)
+    cache[key] = cid
+    db.put("stops", cache)
+    return cid
 
 
 SHORT = {"Transilien": "Train", "Métro": "Métro", "RER": "RER", "Bus": "Bus", "Tramway": "Tram", "Train": "Train"}
 
 
 async def routes(session, origin_cfg: dict, when: dt.datetime, arrival=True, forbid=(), count=4) -> list[dict]:
-    """Itinéraires avec correspondances (RER C, bus...) en évitant les lignes interdites (ex. le N)."""
+    """Itinéraires porte-à-porte jusqu'à l'école (RER C, bus...) en évitant les lignes interdites (ex. le N)."""
     oid = await resolve(session, origin_cfg)
-    dest = await resolve(session, C.dest())
+    try:
+        dest = await resolve_address(session, C.school())
+    except Exception:
+        dest = await resolve(session, C.metro_stop())
     params = [("from", oid), ("to", dest), ("datetime", _fmt(when)),
               ("datetime_represents", "arrival" if arrival else "departure"),
               ("max_nb_transfers", 3), ("count", count), ("data_freshness", "realtime")]
@@ -179,7 +237,7 @@ async def routes(session, origin_cfg: dict, when: dt.datetime, arrival=True, for
 
 
 async def backup_routes(session, origin_cfg: dict, target: dt.datetime, n_line_id: str = "") -> list[dict]:
-    """Itinéraires de secours sans le N, arrivant avant l'heure cible."""
+    """Itinéraires de secours sans le N, arrivant à l'école avant `target` (= début du cours - marge)."""
     try:
         rs = await routes(session, origin_cfg, target, arrival=True, forbid=[n_line_id])
     except Exception as e:
@@ -192,7 +250,7 @@ async def backup_routes(session, origin_cfg: dict, target: dt.datetime, n_line_i
 
 async def plan_retour(session, day: dt.date, last_end: str, count=3) -> list[dict]:
     h, m = map(int, last_end.split(":"))
-    when = max(dt.datetime.combine(day, dt.time(h, m), TZ) + dt.timedelta(minutes=C.get("WALK_SCHOOL")),
+    when = max(dt.datetime.combine(day, dt.time(h, m), TZ) + dt.timedelta(minutes=C.school_delay()),
                dt.datetime.now(TZ))
     dest = await resolve(session, C.dest())
     res = []

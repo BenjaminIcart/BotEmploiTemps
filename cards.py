@@ -70,7 +70,23 @@ def trains_list(r):
     return "\n".join(lines)
 
 
-def aller_card(aller, first_start, backups=None):
+def chain_str(r, school_name, stop_name):
+    t, ch = r["trip"], r.get("chain")
+    if not ch:
+        return None
+    lines = [f"🚆 **{hm(t.dep)}** {r['origin']['name']} → {hm(t.arr)} Montparnasse · N"]
+    if ch["metro"]:
+        m = ch["metro"]
+        lines.append(f"🚇 **{hm(m['dep'])}** Montparnasse → {hm(m['arr'])} {stop_name} · M{m['line']}")
+    else:
+        lines.append(f"🚇 Métro 6 → {stop_name} (horaire estimé)")
+    late = ch["school_arr"] > r["course"]
+    lines.append(f"🚶 🏫 **{school_name} à {hm(ch['school_arr'])}**" +
+                 (" ⚠️ après le début du cours" if late else f" · cours à {hm(r['course'])} ✅"))
+    return "\n".join(lines)
+
+
+def aller_card(aller, first_start, backups=None, school_name="École", stop_name="Bir-Hakeim"):
     fields = []
     for i, r in enumerate(aller):
         o = r["origin"]
@@ -79,6 +95,10 @@ def aller_card(aller, first_start, backups=None):
             fields.append((name, "❌ Aucun train N trouvé", True))
             continue
         fields.append((name, f"🏠 Pars à **{hm(r['leave'])}**\n" + trains_list(r), True))
+    if aller and aller[0]["trip"]:
+        cs = chain_str(aller[0], school_name, stop_name)
+        if cs:
+            fields.append(("🧭 Trajet complet", cs, False))
     if backups:
         fields.append(("🔀 Itinéraires sans le N", "\n".join(route_str(b) for b in backups), False))
     color = "purple" if all(r["trip"] for r in aller) and aller else "orange"
@@ -118,20 +138,24 @@ def changes_card(changes):
     return card("⚠️ Emploi du temps modifié", "orange", fields=fields)
 
 
-def status_card(kind, origin, planned, rt, leave, target, alts, back=False, backups=None):
+def status_card(kind, origin, planned, rt, leave, target, alts, back=False, backups=None, school_eta=None):
     head = f"{origin['emoji']} **{origin['name']}** · train `{planned.mission}`"
     alt_txt = "\n".join(trip_str(a) for a in alts) if alts else None
     bk = ("🔀 Sans le N", "\n".join(route_str(b) for b in backups), False) if backups else None
     if kind == "ok":
         title = "✅ Revenu à l'heure" if back else "✅ Train à l'heure"
         t = rt or planned
-        return card(title, "green", head, [("Départ", f"**{hm(t.dep)}**", True),
-                                           ("Arrivée", hm(t.arr), True),
-                                           ("Pars de chez toi", f"**{hm(leave)}** ({ts(leave, 'R')})", True)])
+        f = [("Départ", f"**{hm(t.dep)}**", True), ("Montparnasse", hm(t.arr), True),
+             ("Pars de chez toi", f"**{hm(leave)}** ({ts(leave, 'R')})", True)]
+        if school_eta:
+            f.append(("🏫 Arrivée école", school_eta, True))
+        return card(title, "green", head, f)
     if kind == "late":
         ok = rt.arr <= target
-        f = [("Départ", f"~~{hm(rt.base_dep)}~~ **{hm(rt.dep)}**", True), ("Arrivée", hm(rt.arr), True),
+        f = [("Départ", f"~~{hm(rt.base_dep)}~~ **{hm(rt.dep)}**", True), ("Montparnasse", hm(rt.arr), True),
              ("En cours à l'heure ?", "✅ Ça passe" if ok else "⚠️ Risque de retard", True)]
+        if school_eta:
+            f.append(("🏫 Arrivée école", school_eta, True))
         if alt_txt:
             f.append(("Autres trains N", alt_txt, False))
         if bk:

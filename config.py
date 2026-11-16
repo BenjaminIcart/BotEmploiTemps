@@ -26,8 +26,15 @@ FIELDS = [
     ("USUAL_COIGNIERES", "Train habituel à Coignières", "time", "", "vide = auto"),
     ("ACCESS_COIGNIERES", "Maison → quai Coignières (min)", "int", "18", "à pied + marge"),
     ("ACCESS_TRAPPES", "Maison → quai Trappes (min)", "int", "22", "voiture + parking"),
-    ("WALK_SCHOOL", "Montparnasse → lycée (min)", "int", "15", ""),
     ("MARGIN", "Marge avant le cours (min)", "int", "5", "le train habituel peut entamer cette marge"),
+    ("__Arrivée à l'école", "", "", "", ""),
+    ("SCHOOL_NAME", "Nom de l'école", "text", "ECE Paris", ""),
+    ("SCHOOL_ADDRESS", "Adresse de l'école", "text", "10 rue Sextius Michel, 75015 Paris",
+     "utilisée pour les itinéraires de secours"),
+    ("METRO_STOP", "Station d'arrivée (métro 6)", "text", "Bir-Hakeim", "nom ou ID stop_area:…"),
+    ("TRANSFER_MONTPARNASSE", "Correspondance train → métro 6 (min)", "int", "6", "marche dans la gare Montparnasse"),
+    ("METRO_EST", "Métro jusqu'à la station, attente comprise (min)", "int", "12", "sert à choisir le bon train"),
+    ("WALK_END", "Station → école à pied (min)", "int", "6", ""),
     ("__Notifications", "", "", "", ""),
     ("DELAY_ALERT", "Alerte à partir de (min de retard)", "int", "3", ""),
     ("CHECK_BEFORE", "Surveiller X min avant de partir", "int", "45", ""),
@@ -93,3 +100,17 @@ def origins():
 
 def dest():
     return {"name": "Montparnasse", "query": "Paris Montparnasse", "id": get("STOP_MONTPARNASSE")}
+
+
+def school_delay() -> int:
+    """Minutes entre l'arrivée du train à Montparnasse et l'arrivée à l'école."""
+    return get("TRANSFER_MONTPARNASSE") + get("METRO_EST") + get("WALK_END")
+
+
+def metro_stop():
+    q = get("METRO_STOP") or "Bir-Hakeim"
+    return {"name": q, "query": q, "id": q if q.startswith("stop_area") else ""}
+
+
+def school():
+    return {"name": get("SCHOOL_NAME") or "École", "query": get("SCHOOL_ADDRESS")}

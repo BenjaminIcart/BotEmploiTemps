@@ -92,6 +92,10 @@ async def get_plan(day: dt.date):
     return state["plan"]
 
 
+def school_target(r) -> dt.datetime:
+    return r["course"] - dt.timedelta(minutes=C.get("MARGIN"))
+
+
 def n_line_id(aller) -> str:
     return next((t.line_id for r in aller for t in r.get("list", []) if t.line_id), "")
 
@@ -99,7 +103,7 @@ def n_line_id(aller) -> str:
 async def get_backups(aller) -> list:
     out = []
     for r in aller:
-        out += await trains.backup_routes(session, r["origin"], r["target"], n_line_id(aller))
+        out += await trains.backup_routes(session, r["origin"], school_target(r), n_line_id(aller))
     return out
 
 
@@ -111,7 +115,8 @@ async def plan_cards(day: dt.date, prefix="", web=False) -> list:
         retour = await trains.plan_retour(session, day, cs[-1]["end"])
         problem = not aller or not aller[0]["trip"]
         backups = await get_backups(aller) if (problem or web) else []
-        out.append(K.aller_card(aller, cs[0]["start"], backups if problem else None))
+        out.append(K.aller_card(aller, cs[0]["start"], backups if problem else None,
+                                C.get("SCHOOL_NAME"), C.metro_stop()["name"]))
         if web and not problem:
             out.append(K.backups_card(backups, "🔀 Si le N ne passe pas"))
         out.append(K.retour_card(retour, f" · fin à {cs[-1]['end']}"))
@@ -147,6 +152,13 @@ async def hero() -> dict:
                 "trains": [{"dep": K.hm(x.dep), "arr": K.hm(x.arr), "delay": x.delay, "main": x.key == t.key,
                             "late": x.arr > limit} for x in r["list"]],
             })
+            ch = r.get("chain")
+            if ch:
+                data["options"][-1]["chain"] = {
+                    "metro": ({"dep": K.hm(ch["metro"]["dep"]), "arr": K.hm(ch["metro"]["arr"]),
+                               "line": ch["metro"]["line"]} if ch["metro"] else None),
+                    "school_arr": K.hm(ch["school_arr"]), "school": C.get("SCHOOL_NAME"),
+                    "stop": C.metro_stop()["name"], "late": ch["school_arr"] > r["course"]}
     state["hero"], state["hero_ts"] = data, time.time()
     return data
 
@@ -215,8 +227,13 @@ async def monitor():
             alts = await trains.alternatives(session, o, r["target"], t_now + dt.timedelta(minutes=o["access"]))
             alts = [a for a in alts if a.key != t.key][:2]
             if kind == "cancel" or rt.arr > r["target"]:
-                backups = await trains.backup_routes(session, o, r["target"], t.line_id)
-        await send([K.status_card(kind, o, t, rt, r["leave"], r["target"], alts, back=bool(last), backups=backups)])
+                backups = await trains.backup_routes(session, o, school_target(r), t.line_id)
+        eta = None
+        if rt:
+            ch = await trains.chain(session, rt.arr)
+            eta = f"**{K.hm(ch['school_arr'])}**" + (" ⚠️" if ch["school_arr"] > r["course"] else " ✅")
+        await send([K.status_card(kind, o, t, rt, r["leave"], r.get("latest_ok", r["target"]), alts,
+                                  back=bool(last), backups=backups, school_eta=eta)])
 
     # Retour : 10 min avant la fin des cours (1 fois par jour)
     last_end = courses(t_now.date())[-1]["end"]
