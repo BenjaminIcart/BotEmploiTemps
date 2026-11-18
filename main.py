@@ -42,12 +42,17 @@ async def send(embeds: list, content: str | None = None) -> bool:
     if "DISCORD_WEBHOOK_URL" in C.missing():
         log.info("Webhook Discord non configuré, message ignoré")
         return False
+    if content is None:  # texte court affiché dans la notification du téléphone
+        content = next((e["_notif"] for e in embeds if e.get("_notif")), None) or \
+            next((e["_notif_edt"] for e in embeds if e.get("_notif_edt")), None)
     batches = [embeds[i:i + 10] for i in range(0, len(embeds), 10)] or [[]]
     for i, batch in enumerate(batches):
         files, clean = [], []
         for j, emb in enumerate(batch):  # images (frise du trajet) envoyées en pièce jointe
             emb = dict(emb)
             png = emb.pop("_png", None)
+            emb.pop("_notif", None)
+            emb.pop("_notif_edt", None)
             if png:
                 name = f"trajet{j}.png"
                 emb["image"] = {"url": f"attachment://{name}"}
@@ -138,8 +143,11 @@ async def plan_cards(day: dt.date, prefix="", web=False) -> list:
         retour = await trains.plan_retour(session, day, cs[-1]["end"], pref=C.preferred_origin(cs[0]["start"]))
         problem = not aller or not aller[0]["trip"]
         backups = await get_backups(aller) if (problem or web) else []
-        out.append(K.aller_card(aller, cs[0]["start"], backups if problem else None,
-                                C.get("SCHOOL_NAME"), C.metro_stop()["name"]))
+        ac = K.aller_card(aller, cs[0]["start"], backups if problem else None,
+                          C.get("SCHOOL_NAME"), C.metro_stop()["name"])
+        if prefix and ac.get("_notif"):
+            ac["_notif"] = prefix.strip(" ·") + " : " + ac["_notif"]
+        out.append(ac)
         for r2 in aller[1:]:
             out.append(K.alt_card(r2, C.get("SCHOOL_NAME"), C.metro_stop()["name"]))
         if web and not problem:
@@ -198,6 +206,26 @@ async def hero() -> dict:
                                "line": ch["metro"]["line"]} if ch["metro"] else None),
                     "school_arr": K.hm(ch["school_arr"]), "school": C.get("SCHOOL_NAME"),
                     "stop": C.metro_stop()["name"], "late": ch["school_arr"] > r["course"]}
+            try:
+                import render
+                data["options"][-1]["route"] = render.route_data(r, C.get("SCHOOL_NAME"), C.metro_stop()["name"])
+            except Exception as e:
+                log.warning("Route : %s", e)
+    # retour du jour (si cours sur place aujourd'hui et pas encore fini depuis longtemps)
+    today_cs = onsite(now().date())
+    if today_cs and "PRIM_API_KEY" not in C.missing():
+        end = today_cs[-1]["end"]
+        end_dt = dt.datetime.combine(now().date(), dt.time(*map(int, end.split(":"))), C.TZ)
+        if now() <= end_dt + dt.timedelta(minutes=90):
+            try:
+                ret = await trains.plan_retour(session, now().date(), end,
+                                               pref=C.preferred_origin(today_cs[0]["start"]))
+                data["retour"] = {"end": end, "cols": [
+                    {"name": r["origin"]["name"],
+                     "trips": [{"dep": K.hm(t.dep), "arr": K.hm(t.arr), "delay": t.delay} for t in r["trips"]]}
+                    for r in ret]}
+            except Exception as e:
+                log.warning("Retour : %s", e)
     state["hero"], state["hero_ts"] = data, time.time()
     return data
 
