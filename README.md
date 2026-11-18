@@ -28,3 +28,10 @@ Les boutons de test vérifient chaque élément. Tout est appliqué sans redéma
 ```bash
 pct exec <CTID> -- bash /opt/edt-trains/update.sh
 ```
+
+## Notifications sur le téléphone (Web Push)
+1. Exposer le site en HTTPS (ex. DuckDNS + Nginx Proxy Manager → `http://IP_CONTAINER:8080`, certificat Let's Encrypt).
+2. Mettre un mot de passe dans Réglages → Avancé, puis ouvrir une fois `https://ton-domaine/?token=MOT_DE_PASSE`.
+3. iPhone (iOS 16.4+) : Safari → Partager → « Sur l'écran d'accueil », ouvrir l'appli depuis l'icône.
+4. Réglages → **Activer les notifications**, puis « envoyer un test ».
+5. Choisir Discord / téléphone / les deux dans Réglages → Notifications.

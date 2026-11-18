@@ -10,6 +10,7 @@ from aiohttp import web
 
 import config as C
 import db
+import push
 from cards import JOURS
 from config import TZ
 
@@ -269,9 +270,46 @@ def render_card(c: dict) -> str:
     return "".join(out)
 
 
-MANIFEST = {"name": "EDT & Trains", "short_name": "EDT", "start_url": "/", "display": "standalone",
-            "background_color": "#0b0c0e", "theme_color": "#0b0c0e",
-            "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml"}]}
+MANIFEST = {"name": "EDT & Trains", "short_name": "EDT", "id": "/", "start_url": "/", "scope": "/",
+            "display": "standalone", "background_color": "#0b0c0e", "theme_color": "#0b0c0e",
+            "icons": [{"src": "/icon-180.png", "sizes": "180x180", "type": "image/png"},
+                      {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}]}
+PUBLIC = ("/manifest.json", "/icon.svg", "/icon-180.png", "/icon-512.png", "/sw.js")
+
+PUSH_JS = r"""
+<script>
+(function(){
+const q=location.search, st=document.getElementById('pstat'), btn=document.getElementById('pbtn');
+const standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone;
+const ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
+const b64=s=>{s=s.replace(/-/g,'+').replace(/_/g,'/');const r=atob(s+'='.repeat((4-s.length%4)%4));return Uint8Array.from([...r].map(c=>c.charCodeAt(0)))};
+const post=(u,d)=>fetch(u+q,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+async function refresh(){
+  if(!window.isSecureContext){st.textContent="Les notifications demandent une adresse en HTTPS (ex. https://edt-xxx.duckdns.org).";btn.style.display='none';return}
+  if(!('serviceWorker' in navigator)||!('PushManager' in window)){
+    st.textContent=ios&&!standalone?"Sur iPhone : Safari → Partager → « Sur l'écran d'accueil », puis ouvre l'appli depuis l'icône et reviens ici.":"Ce navigateur ne gère pas les notifications push.";
+    btn.style.display='none';return}
+  const reg=await navigator.serviceWorker.register('/sw.js');
+  const sub=await reg.pushManager.getSubscription();
+  btn.style.display='';
+  if(sub){st.textContent='Activées sur cet appareil ✓';btn.textContent='Désactiver sur cet appareil';btn.className='btn g';btn.dataset.on=1}
+  else{st.textContent=Notification.permission==='denied'?"Bloquées : autorise-les dans les réglages du téléphone.":"Désactivées sur cet appareil";
+       btn.textContent='Activer les notifications';btn.className='btn';btn.dataset.on=''}
+}
+btn.onclick=async()=>{
+  try{
+    const reg=await navigator.serviceWorker.ready;
+    if(btn.dataset.on){const s=await reg.pushManager.getSubscription();if(s){await post('/api/push/unsubscribe',{endpoint:s.endpoint});await s.unsubscribe()}return refresh()}
+    if(await Notification.requestPermission()!=='granted')return refresh();
+    const k=await (await fetch('/api/push/key'+q)).json();
+    const s=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64(k.key)});
+    await post('/api/push/subscribe',{sub:s.toJSON(),label:(ios?'iPhone':'Appareil')+' · '+new Date().toLocaleDateString('fr-FR')});
+  }catch(err){st.textContent='Erreur : '+err.message}
+  refresh();
+};
+refresh();
+})();
+</script>"""
 ICON_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="24" '
             'fill="#0a84ff"/><rect x="28" y="20" width="44" height="46" rx="12" fill="#fff"/>'
             '<rect x="28" y="44" width="44" height="4" fill="#0a84ff"/><path d="M38 80l6-14M62 80l-6-14" '
@@ -286,9 +324,16 @@ def make_app(state: dict, actions: dict) -> web.Application:
     @web.middleware
     async def auth(request, handler):
         need = C.get("WEB_TOKEN")
-        if need and request.path not in ("/manifest.json", "/icon.svg") and request.query.get("token") != need:
-            return web.Response(status=401, text="🔒 Ajoute ?token=… à l'adresse")
-        return await handler(request)
+        if not need or request.path in PUBLIC:
+            return await handler(request)
+        if request.query.get("token") == need:  # 1re visite avec ?token= : on le retient dans un cookie
+            resp = await handler(request)
+            resp.set_cookie("edt_token", need, max_age=400 * 86400, httponly=True, samesite="Lax",
+                            secure=request.headers.get("X-Forwarded-Proto") == "https" or request.secure)
+            return resp
+        if request.cookies.get("edt_token") == need:
+            return await handler(request)
+        return web.Response(status=401, text="🔒 Ouvre une fois l'adresse avec ?token=TON_MOT_DE_PASSE")
 
     def page(body: str, request, active="/", title="EDT & Trains") -> web.Response:
         t = tok(request)
@@ -307,7 +352,7 @@ def make_app(state: dict, actions: dict) -> web.Application:
                  "<meta name=theme-color content='#0b0c0e'><meta name=apple-mobile-web-app-capable content=yes>"
                  "<meta name=apple-mobile-web-app-status-bar-style content=black-translucent>"
                  "<link rel=manifest href='/manifest.json'><link rel=icon href='/icon.svg'>"
-                 f"<link rel=apple-touch-icon href='/icon.svg'><title>{e(title)}</title><style>{CSS}</style></head><body>"
+                 f"<link rel=apple-touch-icon href='/icon-180.png'><title>{e(title)}</title><style>{CSS}</style></head><body>"
                  f"<div class=top><h1>{e(title)}</h1>"
                  f"<a class=ibtn href='/sync{t}' title='Actualiser'>{ICONS['sync']}</a></div>"
                  f"<main>{warn}{body}</main><nav class=tabs>{nav}</nav></body></html>",
@@ -434,7 +479,14 @@ def make_app(state: dict, actions: dict) -> web.Application:
     async def config_view(request):
         saved = db.get("settings", {})
         t = tok(request)
+        n_dev = len(push.subs())
         out = ["<div class=ok>Réglages enregistrés et appliqués ✓</div>" if request.query.get("saved") else "",
+               "<div class=lbl style='margin-top:8px'>Notifications sur ce téléphone</div><div class=card>"
+               "<div id=pstat class=sub>Vérification…</div>"
+               "<button id=pbtn class=btn type=button style='margin-top:12px;display:none'>Activer les notifications</button>"
+               f"<div class=sub style='font-size:13px;margin-top:10px'>{n_dev} appareil(s) abonné(s)"
+               + (f" · <a href='/config/test/push{t}'><u>envoyer un test</u></a>" if n_dev else "") + "</div></div>",
+               PUSH_JS,
                f"<form class=form method=post action='/config{t}'>"]
         open_sec = False
         for key, label, typ, default, hint in C.FIELDS:
@@ -498,7 +550,33 @@ def make_app(state: dict, actions: dict) -> web.Application:
                     f"<a class='btn g' href='/config{tok(request)}'>Retour aux réglages</a>", request, "/config", "Test")
 
     async def manifest(_):
-        return web.json_response(MANIFEST)
+        return web.json_response(MANIFEST, content_type="application/manifest+json")
+
+    async def sw(_):
+        return web.Response(text=push.SW_JS, content_type="application/javascript",
+                            headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"})
+
+    def png_icon(size):
+        async def h(_):
+            return web.Response(body=push.icon_png(size), content_type="image/png",
+                                headers={"Cache-Control": "public, max-age=86400"})
+        return h
+
+    async def push_key(_):
+        return web.json_response({"key": push.keys()["public"]})
+
+    async def push_sub(request):
+        d = await request.json()
+        sub = d.get("sub") or {}
+        if not sub.get("endpoint"):
+            raise web.HTTPBadRequest()
+        push.add_sub(sub, d.get("label", ""))
+        return web.json_response({"ok": True, "count": len(push.subs())})
+
+    async def push_unsub(request):
+        d = await request.json()
+        push.remove_sub(d.get("endpoint", ""))
+        return web.json_response({"ok": True})
 
     async def icon(_):
         return web.Response(text=ICON_SVG, content_type="image/svg+xml")
@@ -518,6 +596,12 @@ def make_app(state: dict, actions: dict) -> web.Application:
     app.router.add_post("/config", config_post)
     app.router.add_get("/config/test/{what}", test)
     app.router.add_get("/manifest.json", manifest)
+    app.router.add_get("/sw.js", sw)
+    app.router.add_get("/icon-180.png", png_icon(180))
+    app.router.add_get("/icon-512.png", png_icon(512))
+    app.router.add_get("/api/push/key", push_key)
+    app.router.add_post("/api/push/subscribe", push_sub)
+    app.router.add_post("/api/push/unsubscribe", push_unsub)
     app.router.add_get("/icon.svg", icon)
     app.router.add_get("/api", api)
     return app

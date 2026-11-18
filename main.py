@@ -2,6 +2,7 @@
 import asyncio
 import datetime as dt
 import json
+import re
 import logging
 import time
 
@@ -12,6 +13,7 @@ import cards as K
 import config as C
 import db
 import ics_sync
+import push
 import trains
 import web
 
@@ -37,9 +39,26 @@ def onsite(day):
 
 # ---------- Discord ----------
 async def send(embeds: list, content: str | None = None) -> bool:
+    """Envoie une notification : Discord et/ou téléphone (Web Push) selon le réglage."""
+    mode = C.get("NOTIFY_MODE")
+    ok = False
+    if mode != "Téléphone seulement":
+        ok = await send_discord(embeds, content)
+    if mode != "Discord seulement":
+        first = next((e for e in embeds if e.get("_notif")), None) or \
+            next((e for e in embeds if e.get("_notif_edt")), None) or (embeds[0] if embeds else None)
+        if first:
+            body = content or first.get("_notif") or first.get("_notif_edt") or first.get("description", "")
+            title = re.sub(r"^[^\wÀ-ÿ]+", "", first.get("title", "EDT & Trains")).strip() or "EDT & Trains"
+            n = await push.send(title, re.sub(r"[*`~]", "", body), "/", tag=title[:40])
+            ok = ok or n > 0
+    return ok
+
+
+async def send_discord(embeds: list, content: str | None = None) -> bool:
     """Envoie des cards sur Discord via le webhook (10 cards max par message)."""
     url = C.get("DISCORD_WEBHOOK_URL")
-    if "DISCORD_WEBHOOK_URL" in C.missing():
+    if not url.startswith("http"):
         log.info("Webhook Discord non configuré, message ignoré")
         return False
     if content is None:  # texte court affiché dans la notification du téléphone
@@ -337,9 +356,18 @@ async def every(seconds, fn, name: str):
 
 
 # ---------- actions du site ----------
+async def test_push() -> list:
+    n = await push.send("Test réussi", "Les notifications arrivent bien sur ce téléphone 👍", "/")
+    if not push.subs():
+        raise RuntimeError("Aucun appareil abonné : active d'abord les notifications depuis l'appli sur ton téléphone")
+    if not n:
+        raise RuntimeError("Échec de l'envoi (voir les logs)")
+    return [K.card(f"Notification envoyée à {n} appareil(s)", "green", "Regarde ton téléphone.")]
+
+
 async def test_discord() -> list:
     c = K.test_card()
-    if not await send([c]):
+    if not await send_discord([c]):
         raise RuntimeError("Échec de l'envoi : vérifie l'URL du webhook (voir les logs)")
     return [c]
 
@@ -368,6 +396,7 @@ async def main():
         "send": send,
         "test_discord": test_discord,
         "test_prim": test_prim,
+        "test_push": test_push,
         "config_saved": on_config_saved,
     }
     runner = aioweb.AppRunner(web.make_app(state, actions))

@@ -3,3 +3,4 @@ icalendar>=5
 recurring-ical-events>=3
 python-dotenv>=1
 pillow>=10.1
+pywebpush>=2.0

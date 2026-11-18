@@ -39,6 +39,8 @@ FIELDS = [
     ("METRO_EST", "Métro jusqu'à la station, attente comprise (min)", "int", "12", "sert à choisir le bon train"),
     ("WALK_END", "Station → école à pied (min)", "int", "6", ""),
     ("__Notifications", "", "", "", ""),
+    ("NOTIFY_MODE", "Où envoyer les notifications", "choice:Discord + téléphone|Discord seulement|Téléphone seulement",
+     "Discord + téléphone", "téléphone = appli ajoutée à l'écran d'accueil (HTTPS requis)"),
     ("DELAY_ALERT", "Alerte à partir de (min de retard)", "int", "3", ""),
     ("CHECK_BEFORE", "Surveiller X min avant de partir", "int", "45", ""),
     ("RECAP_HOUR", "Heure du récap du lendemain", "time", "20:00", ""),
@@ -54,7 +56,7 @@ FIELDS = [
 ]
 _DEFAULTS = {k: d for k, _, t, d, _ in FIELDS if t}
 _TYPES = {k: t for k, _, t, _, _ in FIELDS if t}
-REQUIRED = ("ICS_URL", "DISCORD_WEBHOOK_URL", "PRIM_API_KEY")
+REQUIRED = ("ICS_URL", "DISCORD_WEBHOOK_URL", "PRIM_API_KEY")  # webhook non requis en mode « Téléphone seulement »
 
 
 def get(key: str):
@@ -87,6 +89,8 @@ def save(values: dict):
 def missing() -> list[str]:
     out = []
     for k in REQUIRED:
+        if k == "DISCORD_WEBHOOK_URL" and get("NOTIFY_MODE") == "Téléphone seulement":
+            continue
         v = get(k)
         if not v or "..." in v or (k != "PRIM_API_KEY" and not v.startswith("http")):
             out.append(k)
