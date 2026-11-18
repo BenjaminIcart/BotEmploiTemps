@@ -144,7 +144,7 @@ async def plan_cards(day: dt.date, prefix="", web=False) -> list:
             out.append(K.alt_card(r2, C.get("SCHOOL_NAME"), C.metro_stop()["name"]))
         if web and not problem:
             out.append(K.backups_card(backups, "🔀 Si le N ne passe pas"))
-        out.append(K.retour_card(retour, f" · fin à {cs[-1]['end']}"))
+        out.append(K.retour_card(retour, f" · fin à {cs[-1]['end']}", cs[-1]["end"]))
     return out
 
 
@@ -152,7 +152,7 @@ async def retour_cards(end: str | None = None) -> list:
     cs = onsite(now().date())
     pref = C.preferred_origin(cs[0]["start"]) if cs else None
     res = await trains.plan_retour(session, now().date(), end or now().strftime("%H:%M"), pref=pref)
-    return [K.retour_card(res, f" · fin à {end}" if end else "")]
+    return [K.retour_card(res, f" · fin à {end}" if end else "", end)]
 
 
 async def hero() -> dict:
@@ -169,12 +169,10 @@ async def hero() -> dict:
             if not r["trip"]:
                 continue
             try:
-                import timeline
-                tl = timeline.from_plan(r, C.get("SCHOOL_NAME"), C.metro_stop()["name"])
-                if tl:
-                    if i:
-                        tl["title"] = "Autre option · " + tl["title"]
-                    state["hero_png"].append(timeline.render(tl))
+                import render
+                png = render.aller_png(r, C.get("SCHOOL_NAME"), C.metro_stop()["name"], alt=i > 0)
+                if png:
+                    state["hero_png"].append(png)
             except Exception as e:
                 log.warning("Frise : %s", e)
         for i, r in enumerate(aller):
@@ -269,12 +267,14 @@ async def monitor():
             alts = [a for a in alts if a.key != t.key][:2]
             if kind == "cancel" or rt.arr > r["target"]:
                 backups = await trains.backup_routes(session, o, school_target(r), t.line_id)
-        eta = None
+        eta, route_r = None, None
         if rt:
             ch = await trains.chain(session, rt.arr)
             eta = f"**{K.hm(ch['school_arr'])}**" + (" ⚠️" if ch["school_arr"] > r["course"] else " ✅")
+            route_r = dict(r, trip=rt, chain=ch)
         await send([K.status_card(kind, o, t, rt, r["leave"], r.get("latest_ok", r["target"]), alts,
-                                  back=bool(last), backups=backups, school_eta=eta)])
+                                  back=bool(last), backups=backups, school_eta=eta, route_r=route_r,
+                                  school_name=C.get("SCHOOL_NAME"), stop_name=C.metro_stop()["name"])])
 
     # Retour : à la fin du dernier cours SUR PLACE (1 fois par jour)
     last_end = onsite(t_now.date())[-1]["end"]
@@ -310,7 +310,7 @@ async def every(seconds, fn, name: str):
 
 # ---------- actions du site ----------
 async def test_discord() -> list:
-    c = K.card("👋 Test réussi", "green", "Le webhook fonctionne, les notifications arriveront ici.")
+    c = K.test_card()
     if not await send([c]):
         raise RuntimeError("Échec de l'envoi : vérifie l'URL du webhook (voir les logs)")
     return [c]

@@ -45,6 +45,30 @@ def route_str(r):
     return f"**{hm(r['dep'])}** → {hm(r['arr'])} · " + " ➜ ".join(r["legs"])
 
 
+def with_image(c, make, summary=None):
+    """Ajoute l'image (PNG) à la card ; si elle est générée, le texte détaillé est retiré."""
+    try:
+        png = make()
+    except Exception as e:  # Pillow absent ou erreur : on garde la version texte
+        import logging
+        logging.getLogger("cards").warning("Image : %s", e)
+        png = None
+    if png:
+        c["_png"] = png
+        c.pop("fields", None)
+        c.pop("footer", None)
+        if summary is not None:
+            c["description"] = summary
+        else:
+            c.pop("description", None)
+    return c
+
+
+def _render():
+    import render
+    return render
+
+
 # ---------- cards ----------
 def course_row(c):
     meta = " · ".join(x for x in (c.get("type"), "*en ligne*" if c.get("virtual") else c.get("location")) if x)
@@ -53,7 +77,8 @@ def course_row(c):
 
 def edt_card(day, courses, title_prefix=""):
     if not courses:
-        return card(f"{title_prefix}{jour(day)}", "grey", "Pas cours")
+        return with_image(card(f"{title_prefix}{jour(day)}", "grey", "Pas cours"),
+                          lambda: _render().edt_png(f"{title_prefix}{jour(day)}", "", []))
     onsite = [c for c in courses if not c.get("virtual")]
     online = len(courses) - len(onsite)
     foot = []
@@ -61,7 +86,8 @@ def edt_card(day, courses, title_prefix=""):
         foot.append(f"Sur place {onsite[0]['start']} → {onsite[-1]['end']}")
     if online:
         foot.append(f"{online} en ligne")
-    return card(f"{title_prefix}{jour(day)}", "blue", "\n".join(map(course_row, courses)), footer=" · ".join(foot))
+    c = card(f"{title_prefix}{jour(day)}", "blue", "\n".join(map(course_row, courses)), footer=" · ".join(foot))
+    return with_image(c, lambda: _render().edt_png(f"{title_prefix}{jour(day)}", " · ".join(foot), courses))
 
 
 def trains_list(r):
@@ -96,26 +122,19 @@ def aller_card(aller, first_start, backups=None, school_name="École", stop_name
     if late:
         lines.append("⚠️ Arrivée après le début du cours")
     others = [x for x in r["list"] if x.key != t.key]
+    limit = r.get("latest_ok", r["target"])
     fields = []
-    png = None
-    try:
-        import timeline
-        tl = timeline.from_plan(r, school_name, stop_name)
-        png = timeline.render(tl) if tl else None
-    except Exception:
-        png = None
-    if png:  # la frise remplace le détail texte
-        lines = [lines[0]] + (["⚠️ Arrivée après le début du cours"] if late else [])
     if others:
         fields.append(("Autres trains", " · ".join(
-            hm(x.dep) + (" (trop tard)" if x.arr > r.get("latest_ok", r["target"]) else "") for x in others), True))
+            hm(x.dep) + (" (trop tard)" if x.arr > limit else "") for x in others), True))
     if backups:
         fields.append(("Sans le N", "\n".join(route_str(b) for b in backups), False))
     c = card(f"Départ {hm(r['leave'])} · {o['name']}", "orange" if late or backups else "purple",
              "\n".join(lines), fields)
-    if png:
-        c["_png"] = png
-    return c
+    pills = [(hm(x.dep) + (f" +{x.delay}" if x.delay > 0 else "") + (" · trop tard" if x.arr > limit else ""),
+              x.arr > limit) for x in others]
+    return with_image(c, lambda: _render().aller_png(r, school_name, stop_name, pills, backups=backups or ()),
+                      lines[0] + ("\n⚠️ Arrivée après le début du cours" if late else ""))
 
 
 def alt_card(r, school_name="École", stop_name="Bir-Hakeim"):
@@ -128,26 +147,25 @@ def alt_card(r, school_name="École", stop_name="Bir-Hakeim"):
     if ch:
         desc += f" · {school_name} à {hm(ch['school_arr'])}" + (" ⚠️" if ch["school_arr"] > r["course"] else "")
     c = card(f"Autre option · {r['origin']['name']}", "grey", desc)
-    try:
-        import timeline
-        tl = timeline.from_plan(r, school_name, stop_name)
-        if tl:
-            tl["title"] = "Autre option · " + tl["title"]
-            c["_png"] = timeline.render(tl)
-    except Exception:
-        pass
-    return c
+    return with_image(c, lambda: _render().aller_png(r, school_name, stop_name, alt=True), desc)
 
 
-def retour_card(retour, subtitle=""):
+def retour_card(retour, subtitle="", end=None):
     fields = [(r["origin"]["name"], "\n".join(trip_str(t) for t in r["trips"]) or "—", True) for r in retour]
-    return card(f"Retour{subtitle}", "teal", "Trains N à Montparnasse que tu peux attraper (métro depuis l'école compris)", fields)
+    c = card(f"Retour{subtitle}", "teal", "Trains N à Montparnasse que tu peux attraper (métro depuis l'école compris)", fields)
+    cols = [(r["origin"]["name"], [(hm(t.dep), hm(t.arr), t.delay) for t in r["trips"]]) for r in retour]
+    first = next((t for r in retour[:1] for t in r["trips"][:1]), None)
+    summary = f"Prochain train : **{hm(first.dep)}** vers {retour[0]['origin']['name']}" if first else None
+    return with_image(c, lambda: _render().retour_png(f"Fin des cours à {end}" if end else "Trains retour",
+                                                     "Depuis Montparnasse · métro depuis l'école compris", cols),
+                      summary)
 
 
 def virtual_card(c):
-    return card(f"Cours en ligne à {c['start']}", "teal",
-                f"**{c['summary']}**" + (f" · {c['type']}" if c.get("type") else "") +
-                f"\n{c['start']} – {c['end']}\n\nPense à ouvrir l'app pour te mettre présent.")
+    e = card(f"Cours en ligne à {c['start']}", "teal",
+             f"**{c['summary']}**" + (f" · {c['type']}" if c.get("type") else "") +
+             f"\n{c['start']} – {c['end']}\n\nPense à ouvrir l'app pour te mettre présent.")
+    return with_image(e, lambda: _render().virtual_png(c), f"**{c['summary']}** · pense à te mettre présent")
 
 
 def backups_card(backups, title="🔀 Autres itinéraires (sans le N)"):
@@ -172,10 +190,49 @@ def changes_card(changes):
                 lines.append(f"🔄 **{a['summary']}** {a['start']}–{a['end']} {a['location']} → "
                              f"**{b['start']}–{b['end']} {b['location']}**")
         fields.append((jour(dt.date.fromisoformat(d)), "\n".join(lines), False))
-    return card("⚠️ Emploi du temps modifié", "orange", fields=fields)
+    c = card("⚠️ Emploi du temps modifié", "orange", fields=fields)
+    groups = []
+    for d, chs in changes.items():
+        items = []
+        for kind, a, b in chs:
+            if kind == "add":
+                items.append(("add", b["summary"], f"{b['start']}–{b['end']} · {b.get('location', '')}".strip(" ·")))
+            elif kind == "del":
+                items.append(("del", a["summary"], f"{a['start']}–{a['end']}"))
+            else:
+                det = f"{a['start']}–{a['end']} → {b['start']}–{b['end']}"
+                if a.get("location") != b.get("location"):
+                    det += f" · {b.get('location', '')}"
+                items.append(("mod", a["summary"], det))
+        groups.append((jour(dt.date.fromisoformat(d)), items))
+    n = sum(len(g) for _, g in groups)
+    return with_image(c, lambda: _render().changes_png(groups), f"{n} changement(s) dans ton emploi du temps")
 
 
-def status_card(kind, origin, planned, rt, leave, target, alts, back=False, backups=None, school_eta=None):
+def status_card(kind, origin, planned, rt, leave, target, alts, back=False, backups=None, school_eta=None,
+                route_r=None, school_name="École", stop_name="Bir-Hakeim"):
+    c = _status_text(kind, origin, planned, rt, leave, target, alts, back, backups, school_eta)
+    t = rt or planned
+    if kind == "ok":
+        title = ("Revenu à l'heure · " if back else "") + f"{hm(t.dep)} {origin['name']}"
+        sub = f"Pars de chez toi à {hm(leave)}"
+    elif kind == "late":
+        title = f"+{rt.delay} min · {hm(rt.dep)} {origin['name']}"
+        sub = f"Prévu à {hm(rt.base_dep)} · " + ("ça passe pour le cours" if rt.arr <= target else "risque de retard en cours")
+    else:
+        title = f"{hm(planned.base_dep)} {origin['name']}"
+        sub = "Prends un autre train ou un itinéraire sans le N"
+    pills = [(hm(a.dep) + (f" +{a.delay}" if a.delay > 0 else ""), False) for a in alts]
+
+    def make():
+        R = _render()
+        route = R.route_data(route_r, school_name, stop_name) if (route_r and kind != "cancel") else None
+        return R.status_png(kind, title, sub, route, pills, backups or ())
+
+    return with_image(c, make, c.get("description"))
+
+
+def _status_text(kind, origin, planned, rt, leave, target, alts, back=False, backups=None, school_eta=None):
     head = f"{origin['emoji']} **{origin['name']}** · train `{planned.mission}`"
     alt_txt = "\n".join(trip_str(a) for a in alts) if alts else None
     bk = ("🔀 Sans le N", "\n".join(route_str(b) for b in backups), False) if backups else None
@@ -204,3 +261,9 @@ def status_card(kind, origin, planned, rt, leave, target, alts, back=False, back
     if bk:
         f.append(bk)
     return card("🚫 Train supprimé", "red", head, f)
+
+
+def test_card():
+    c = card("👋 Test réussi", "green", "Le webhook fonctionne, les notifications arriveront ici.")
+    return with_image(c, lambda: _render().simple_png("Connexion", "Webhook connecté",
+                                                     "Les notifications arriveront dans ce salon"), "Webhook connecté")
