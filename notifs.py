@@ -1,36 +1,29 @@
-"""Historique des notifications : appuyer sur une notif du téléphone ouvre ses images."""
+"""Historique des notifications : appuyer sur une notif du téléphone ouvre une page qui les affiche."""
 import datetime as dt
 import secrets
-from pathlib import Path
 
 import db
-from config import BASE_DIR, TZ
+from config import TZ
 
-DIR = BASE_DIR / "notifs"
-KEEP = 40
+KEEP = 50
 
 
 def save(embeds: list, title: str, body: str) -> str:
-    """Enregistre les cards (images sur disque) et renvoie l'identifiant de la notification."""
-    DIR.mkdir(exist_ok=True)
+    """Garde uniquement les données des cards (pas d'images) et renvoie l'identifiant."""
     nid = dt.datetime.now(TZ).strftime("%Y%m%d%H%M%S") + secrets.token_hex(3)
-    cards = []
-    # la card qui a déclenché la notif (trajet, retard…) en premier
-    embeds = sorted(embeds, key=lambda e: not e.get("_notif"))
-    for i, e in enumerate(embeds):
-        if e.get("_png"):
-            name = f"{nid}_{i}.png"
-            (DIR / name).write_bytes(e["_png"])
-            cards.append({"png": name, "title": e.get("title", "")})
+    # la card déclencheuse en premier, puis l'autre option de trajet, puis le reste dans l'ordre
+    main = next((e for e in embeds if e.get("_notif")), None)
+    alts = [e for e in embeds if (e.get("_data") or {}).get("alt")]
+    embeds = ([main] if main else []) + alts + [e for e in embeds if e is not main and e not in alts]
+    blocks = []
+    for e in embeds:
+        if e.get("_data"):
+            blocks.append(e["_data"])
         else:
-            cards.append({"card": {k: v for k, v in e.items() if not k.startswith("_")}})
+            blocks.append({"type": "text", "card": {k: v for k, v in e.items() if not k.startswith("_")}})
     lst = db.get("notifs", [])
     lst.insert(0, {"id": nid, "ts": dt.datetime.now(TZ).isoformat(timespec="minutes"),
-                   "title": title, "body": body, "cards": cards})
-    for old in lst[KEEP:]:  # ménage
-        for c in old["cards"]:
-            if c.get("png"):
-                (DIR / c["png"]).unlink(missing_ok=True)
+                   "title": title, "body": body, "blocks": blocks})
     db.put("notifs", lst[:KEEP])
     return nid
 
@@ -41,8 +34,3 @@ def get(nid: str) -> dict | None:
 
 def latest(n: int = 20) -> list:
     return db.get("notifs", [])[:n]
-
-
-def png_path(name: str) -> Path | None:
-    p = DIR / Path(name).name
-    return p if p.exists() and p.suffix == ".png" else None

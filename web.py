@@ -114,6 +114,16 @@ code{background:#ffffff14;padding:1px 6px;border-radius:6px;font-size:.9em}
 .form small{color:var(--mute);display:block;margin:6px 2px 0;font-size:13px}
 .form input,.form select{width:100%;padding:13px 14px;border-radius:12px;border:1px solid var(--line);background:var(--row);color:var(--txt);font-size:16px;font-family:inherit}
 .form input:focus,.form select:focus{outline:2px solid var(--blue);border-color:transparent}
+.ico{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;flex:0 0 auto;background:var(--a);
+color:#111;font-weight:900;font-size:22px;box-shadow:0 0 0 6px color-mix(in srgb,var(--a) 25%,transparent)}
+.hd{display:flex;gap:14px;align-items:center}.hd h2{margin:2px 0 0;font-size:24px;letter-spacing:-.02em;line-height:1.15}
+.h2{font-size:26px;font-weight:800;letter-spacing:-.02em;margin:4px 0 2px;line-height:1.15}
+.bk{background:var(--row);border-radius:14px;padding:11px 13px;margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.bk b{font-variant-numeric:tabular-nums;margin-right:4px}.bk .chip{background:var(--line);font-size:12px;padding:4px 9px}
+.chg{display:flex;gap:10px;align-items:center;background:var(--row);border-radius:14px;padding:11px 12px;margin-top:8px}
+.chg b{flex:1;min-width:0}.chg small{display:block;color:var(--mute);font-weight:400}
+.c-add{color:var(--green);background:#30d15824}.c-mod{color:var(--orange);background:#ff9f0a24}
+.block{margin-bottom:14px}
 .emb{background:var(--card);border-radius:18px;padding:16px;margin-bottom:12px;border-left:4px solid var(--c)}
 .emb .et{font-weight:800;margin-bottom:6px}.emb .ef{display:grid;gap:10px;margin-top:10px}.emb .fn{font-weight:700;font-size:14px}
 """
@@ -236,6 +246,110 @@ def course_rows(courses, day=None):
         if not virt:
             prev = c["end"]
     return "".join(out)
+
+
+def steps_html(r) -> str:
+    """Frise verticale (même rendu que l'accueil)."""
+    if not r:
+        return ""
+    out = ["<div class=steps>"]
+    for i, s in enumerate(r["stops"]):
+        L = r["legs"][i] if i < len(r["legs"]) else None
+        kind = (L or {}).get("kind")
+        cls = "N" if kind == "N" else ("m6" if kind == "6" else "")
+        lc = "var(--n)" if kind == "N" else ("var(--m6)" if kind == "6" else "")
+        dash = kind in ("walk", "car")
+        tc = "r" if s.get("warn") else ("o" if s.get("delay") else "")
+        leg = (f"<span class='leg {cls}'>{e(L['label'])}" + (f"<span>{e(L['detail'])}</span>" if L.get("detail") else "")
+               + "</span>") if L else ""
+        delay = f" <span class='chip c-late'>+{s['delay']}</span>" if s.get("delay") else ""
+        out.append(f"<div class='st {'dash' if dash else ''} {'warn' if s.get('warn') else ''}' style='--lc:{lc}'>"
+                   f"<div class='t {tc}'>{e(s['time'])}</div><div class=d></div>"
+                   f"<div class=n><b>{e(s['name'])}{delay}</b>{leg}</div></div>")
+    out.append("</div>")
+    return "".join(out)
+
+
+def _pills(items, label):
+    if not items:
+        return ""
+    return (f"<div class=row><span class=sub style='font-size:14px'>{label}</span>"
+            + "".join(f"<span class='chip {'c-cancel' if w else ''}'>{e(t)}</span>" for t, w in items) + "</div>")
+
+
+def _backups(items):
+    if not items:
+        return ""
+    return ("<div class=lbl style='margin:16px 0 4px'>Sans le N</div>"
+            + "".join(f"<div class=bk><b>{e(b['dep'])} → {e(b['arr'])}</b>"
+                      + "".join(f"<span class=chip>{e(x)}</span>" for x in b["legs"]) + "</div>" for b in items))
+
+
+def render_data(d: dict) -> str:
+    """Affichage natif (HTML) d'une card : notifications, pages Trajet / Retour."""
+    t = d.get("type")
+    if t == "edt":
+        day = dt.date.fromisoformat(d["day"]) if d.get("day") else None
+        body = course_rows(d["courses"], day) if d["courses"] else "<div class=free>Pas cours</div>"
+        return (f"<div class=block><div class=lbl style='margin-top:4px'>{e(d['title'])}"
+                + (f" · {e(d['subtitle'])}" if d.get("subtitle") else "") + f"</div>{body}</div>")
+    if t == "aller":
+        acc = "var(--mute)" if d.get("alt") else ("var(--orange)" if d.get("late") else "var(--purple)")
+        if d.get("alt"):
+            return (f"<details class='alt block'><summary><div><div class=k style='--a:var(--mute)'>Autre option · "
+                    f"{e(d.get('origin', ''))}</div><div><span class=tm>{e(d.get('leave', ''))}</span> "
+                    f"<span class=sub>· {e(d.get('sub', ''))}</span></div></div><span class=chev>›</span></summary>"
+                    f"<div class=in>{steps_html(d.get('route'))}</div></details>")
+        chip = "<span class='chip c-cancel'>En retard</span>" if d.get("late") else "<span class='chip' style='color:var(--purple);background:#bf5af224'>Conseillé</span>"
+        big = f"<div class=big>{e(d['leave'])}</div>" if d.get("leave") else f"<div class=h2>{e(d['title'])}</div>"
+        origin = f"Départ de chez toi · <b>{e(d.get('origin', ''))}</b><br>" if d.get("leave") else ""
+        return (f"<div class='card acc block' style='--a:{acc}'><div class='row sp'><div class=k>Trajet du matin</div>{chip}</div>"
+                f"{big}<div class=sub>{origin}{e(d.get('sub', ''))}</div>{steps_html(d.get('route'))}"
+                f"{_pills(d.get('others'), 'Autres trains')}{_backups(d.get('backups'))}</div>")
+    if t == "status":
+        k = d["kind"]
+        acc, ico, lab = {"ok": ("var(--green)", "✓", "Train à l'heure"), "late": ("var(--orange)", "!", "Retard"),
+                         "cancel": ("var(--red)", "✕", "Train supprimé")}[k]
+        return (f"<div class='card acc block' style='--a:{acc}'><div class=hd><div class=ico>{ico}</div>"
+                f"<div><div class=k>{lab}</div><h2>{e(d['title'])}</h2></div></div>"
+                f"<div class=sub style='margin-top:10px'>{e(d['sub'])}</div>{steps_html(d.get('route'))}"
+                f"{_pills(d.get('others'), 'Autres trains N')}{_backups(d.get('backups'))}</div>")
+    if t == "retour":
+        cols = "".join(
+            f"<div><h4>Vers {e(c['name'])}</h4>"
+            + ("".join(f"<div class='tr {'first' if i == 0 and j == 0 else ''}'><b>{x['dep']}</b><small>→ {x['arr']}</small>"
+                       + (f"<em>+{x['delay']}</em>" if x.get("delay") and x["delay"] > 0 else "") + "</div>"
+                       for j, x in enumerate(c["trips"])) or "<div class=sk>Aucun train</div>") + "</div>"
+            for i, c in enumerate(d["cols"]))
+        return (f"<div class='card acc block' style='--a:var(--teal)'><div class=k>Retour</div><div class=h2>{e(d['title'])}</div>"
+                f"<div class=sub style='margin-bottom:14px'>{e(d['subtitle'])}</div><div class=ret>{cols}</div></div>")
+    if t == "changes":
+        tags = {"add": ("c-add", "Nouveau"), "del": ("c-cancel", "Annulé"), "mod": ("c-mod", "Déplacé")}
+        g = "".join(f"<div class=lbl style='margin:14px 0 2px'>{e(x['day'])}</div>"
+                    + "".join(f"<div class=chg><span class='chip {tags[i['kind']][0]}'>{tags[i['kind']][1]}</span>"
+                              f"<b>{e(i['name'])}<small>{e(i['detail'])}</small></b></div>" for i in x["items"])
+                    for x in d["groups"])
+        return (f"<div class='card acc block' style='--a:var(--orange)'><div class=k>Emploi du temps modifié</div>"
+                f"<div class=h2>{d['n']} changement{'s' if d['n'] > 1 else ''}</div>{g}</div>")
+    if t == "virtual":
+        c = d["course"]
+        return (f"<div class='card acc block' style='--a:var(--teal)'><div class='row sp'><div class=k>Cours en ligne</div>"
+                f"<span class='chip' style='color:var(--teal);background:#40c8e024'>En ligne</span></div>"
+                f"<div class=big style='font-size:44px'>{e(c['start'])} – {e(c['end'])}</div>"
+                f"<div class=h2 style='font-size:21px'>{e(c['summary'])}</div>"
+                f"<div class=sub>{e(c.get('type') or '')} · ouvre l'app de l'école pour te mettre présent</div></div>")
+    if t == "simple":
+        return (f"<div class='card acc block' style='--a:var(--green)'><div class=hd><div class=ico>✓</div>"
+                f"<div><div class=k>{e(d.get('label', ''))}</div><h2>{e(d['title'])}</h2></div></div>"
+                f"<div class=sub style='margin-top:10px'>{e(d.get('sub', ''))}</div></div>")
+    if t == "text":
+        return render_card(d["card"])
+    return ""
+
+
+def show(c: dict) -> str:
+    """Card → HTML natif si possible, sinon image ou texte."""
+    return render_data(c["_data"]) if c.get("_data") else render_card(c)
 
 
 def md(text: str) -> str:
@@ -447,7 +561,7 @@ def make_app(state: dict, actions: dict) -> web.Application:
                             else "<div class=warn>Envoi Discord impossible (webhook ?)</div>")
             except Exception as ex:
                 return err(ex, request, active)
-            body = (sent + "".join(map(render_card, cs)) +
+            body = (sent + "".join(map(show, cs)) +
                     f"<a class=btn href='?discord=1{tok(request, False)}'>Envoyer sur Discord</a>")
             return page(body, request, active, title)
         return handler
@@ -548,7 +662,7 @@ def make_app(state: dict, actions: dict) -> web.Application:
             cs = await actions[f"test_{name}"]()
         except Exception as ex:
             return err(ex, request, "/config")
-        return page("".join(map(render_card, cs)) +
+        return page("".join(map(show, cs)) +
                     f"<a class='btn g' href='/config{tok(request)}'>Retour aux réglages</a>", request, "/config", "Test")
 
     # ---------- notifications (ouvertes depuis le téléphone) ----------
@@ -558,21 +672,10 @@ def make_app(state: dict, actions: dict) -> web.Application:
             return page("<div class=warn>Notification expirée.</div>", request, "/", "Notification")
         t = tok(request)
         when = n["ts"][11:16] + " · " + n["ts"][8:10] + "/" + n["ts"][5:7]
-        out = [f"<div class=sub style='margin:4px 4px 12px'>{e(n['body'])}<br><small>{when}</small></div>"]
-        for c in n["cards"]:
-            if c.get("png"):
-                out.append(f"<img class=full alt='{e(c.get('title', ''))}' src='/n/img/{e(c['png'])}{t}'>")
-            else:
-                out.append(render_card(c["card"]))
+        out = [f"<div class=sub style='margin:0 4px 14px'>{e(n['body'])}<br><small style='color:var(--dim)'>Reçue à {when}</small></div>"]
+        out += [render_data(bl) for bl in n.get("blocks", [])]
         out.append(f"<div class=btns><a class=btn href='/{t}'>Accueil</a><a class='btn g' href='/n{t}'>Toutes les notifs</a></div>")
         return page("".join(out), request, "/", n["title"])
-
-    async def notif_img(request):
-        p = notifs.png_path(request.match_info["name"])
-        if not p:
-            raise web.HTTPNotFound()
-        return web.Response(body=p.read_bytes(), content_type="image/png",
-                            headers={"Cache-Control": "private, max-age=604800"})
 
     async def notif_list(request):
         t = tok(request)
@@ -631,7 +734,6 @@ def make_app(state: dict, actions: dict) -> web.Application:
     app.router.add_post("/config", config_post)
     app.router.add_get("/config/test/{what}", test)
     app.router.add_get("/n", notif_list)
-    app.router.add_get("/n/img/{name}", notif_img)
     app.router.add_get("/n/{nid}", notif_page)
     app.router.add_get("/manifest.json", manifest)
     app.router.add_get("/sw.js", sw)

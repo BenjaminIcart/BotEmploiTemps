@@ -69,6 +69,17 @@ def _render():
     return render
 
 
+def _route(r, school_name, stop_name):
+    try:
+        return _render().route_data(r, school_name, stop_name) if r else None
+    except Exception:
+        return None
+
+
+def _bk(backups):
+    return [{"dep": hm(b["dep"]), "arr": hm(b["arr"]), "legs": b["legs"]} for b in (backups or [])]
+
+
 # ---------- cards ----------
 def course_row(c):
     meta = " · ".join(x for x in (c.get("type"), "*en ligne*" if c.get("virtual") else c.get("location")) if x)
@@ -77,7 +88,9 @@ def course_row(c):
 
 def edt_card(day, courses, title_prefix=""):
     if not courses:
-        return with_image(card(f"{title_prefix}{jour(day)}", "grey", "Pas cours"),
+        e = card(f"{title_prefix}{jour(day)}", "grey", "Pas cours")
+        e["_data"] = {"type": "edt", "title": f"{title_prefix}{jour(day)}", "subtitle": "", "courses": []}
+        return with_image(e,
                           lambda: _render().edt_png(f"{title_prefix}{jour(day)}", "", []))
     onsite = [c for c in courses if not c.get("virtual")]
     online = len(courses) - len(onsite)
@@ -88,6 +101,8 @@ def edt_card(day, courses, title_prefix=""):
         foot.append(f"{online} en ligne")
     c = card(f"{title_prefix}{jour(day)}", "blue", "\n".join(map(course_row, courses)), footer=" · ".join(foot))
     c["_notif_edt"] = f"📅 {jour(day)} : {len(courses)} cours, 1er à {courses[0]['start']}"
+    c["_data"] = {"type": "edt", "title": f"{title_prefix}{jour(day)}", "subtitle": " · ".join(foot),
+                  "courses": courses, "day": day.isoformat()}
     return with_image(c, lambda: _render().edt_png(f"{title_prefix}{jour(day)}", " · ".join(foot), courses))
 
 
@@ -111,6 +126,9 @@ def aller_card(aller, first_start, backups=None, school_name="École", stop_name
         f = [("Sans le N", "\n".join(route_str(b) for b in backups), False)] if backups else None
         c = card("Aller · aucun train N trouvé", "orange", f"1er cours sur place à {first_start}", f)
         c["_notif"] = f"⚠️ Aucun train N trouvé pour ton cours de {first_start}"
+        c["_data"] = {"type": "aller", "alt": False, "title": "Aucun train N trouvé",
+                      "sub": f"1er cours sur place à {first_start}", "late": True, "route": None,
+                      "others": [], "backups": _bk(backups)}
         return c
     r, t = aller[0], aller[0]["trip"]
     o, ch = r["origin"], r.get("chain")
@@ -136,6 +154,11 @@ def aller_card(aller, first_start, backups=None, school_name="École", stop_name
              "\n".join(lines), fields)
     pills = [(hm(x.dep) + (f" +{x.delay}" if x.delay > 0 else "") + (" · trop tard" if x.arr > limit else ""),
               x.arr > limit) for x in others]
+    c["_data"] = {"type": "aller", "alt": False, "leave": hm(r["leave"]), "origin": o["name"],
+                  "title": f"Départ {hm(r['leave'])} · {o['name']}",
+                  "sub": (f"Arrivée {school_name} à {hm(ch['school_arr'])} · cours à {hm(r['course'])}" if ch else ""),
+                  "late": late, "route": _route(r, school_name, stop_name),
+                  "others": [list(p) for p in pills], "backups": _bk(backups)}
     c["_notif"] = (f"🚆 Pars à {hm(r['leave'])} · train {hm(t.dep)} {o['name']}"
                    + (f" (+{t.delay})" if t.delay > 0 else "")
                    + (f" · {school_name} {hm(ch['school_arr'])}" if ch else "")
@@ -154,6 +177,11 @@ def alt_card(r, school_name="École", stop_name="Bir-Hakeim"):
     if ch:
         desc += f" · {school_name} à {hm(ch['school_arr'])}" + (" ⚠️" if ch["school_arr"] > r["course"] else "")
     c = card(f"Autre option · {r['origin']['name']}", "grey", desc)
+    c["_data"] = {"type": "aller", "alt": True, "leave": hm(r["leave"]), "origin": r["origin"]["name"],
+                  "title": f"Départ {hm(r['leave'])} · {r['origin']['name']}",
+                  "sub": (f"Arrivée {school_name} à {hm(ch['school_arr'])} · cours à {hm(r['course'])}" if ch else ""),
+                  "late": bool(ch) and ch["school_arr"] > r["course"], "route": _route(r, school_name, stop_name),
+                  "others": [], "backups": []}
     return with_image(c, lambda: _render().aller_png(r, school_name, stop_name, alt=True), desc)
 
 
@@ -161,6 +189,9 @@ def retour_card(retour, subtitle="", end=None):
     fields = [(r["origin"]["name"], "\n".join(trip_str(t) for t in r["trips"]) or "—", True) for r in retour]
     c = card(f"Retour{subtitle}", "teal", "Trains N à Montparnasse que tu peux attraper (métro depuis l'école compris)", fields)
     cols = [(r["origin"]["name"], [(hm(t.dep), hm(t.arr), t.delay) for t in r["trips"]]) for r in retour]
+    c["_data"] = {"type": "retour", "title": f"Fin des cours à {end}" if end else "Trains retour",
+                  "subtitle": "Depuis Montparnasse · métro depuis l'école compris",
+                  "cols": [{"name": n, "trips": [{"dep": a, "arr": b, "delay": d} for a, b, d in ts_]} for n, ts_ in cols]}
     first = next((t for r in retour[:1] for t in r["trips"][:1]), None)
     summary = f"Prochain train : **{hm(first.dep)}** vers {retour[0]['origin']['name']}" if first else None
     if first:
@@ -175,6 +206,7 @@ def virtual_card(c):
              f"**{c['summary']}**" + (f" · {c['type']}" if c.get("type") else "") +
              f"\n{c['start']} – {c['end']}\n\nPense à ouvrir l'app pour te mettre présent.")
     e["_notif"] = f"💻 Cours en ligne à {c['start']} : {c['summary']} — mets-toi présent"
+    e["_data"] = {"type": "virtual", "course": c}
     return with_image(e, lambda: _render().virtual_png(c), f"**{c['summary']}** · pense à te mettre présent")
 
 
@@ -216,6 +248,8 @@ def changes_card(changes):
                 items.append(("mod", a["summary"], det))
         groups.append((jour(dt.date.fromisoformat(d)), items))
     n = sum(len(g) for _, g in groups)
+    c["_data"] = {"type": "changes", "n": n,
+                  "groups": [{"day": d, "items": [{"kind": a, "name": b, "detail": x} for a, b, x in it]} for d, it in groups]}
     word = {"add": "ajouté", "del": "annulé", "mod": "déplacé"}
     first = next(((d, it) for d, its in groups for it in its), None)
     if first:
@@ -252,6 +286,9 @@ def status_card(kind, origin, planned, rt, leave, target, alts, back=False, back
         return R.status_png(kind, title, sub, route, pills, backups or ())
 
     c["_notif"] = notif
+    c["_data"] = {"type": "status", "kind": kind, "title": title, "sub": sub,
+                  "route": _route(route_r, school_name, stop_name) if kind != "cancel" else None,
+                  "others": [list(p) for p in pills], "backups": _bk(backups)}
     return with_image(c, make, c.get("description"))
 
 
@@ -288,5 +325,7 @@ def _status_text(kind, origin, planned, rt, leave, target, alts, back=False, bac
 
 def test_card():
     c = card("👋 Test réussi", "green", "Le webhook fonctionne, les notifications arriveront ici.")
+    c["_data"] = {"type": "simple", "kind": "ok", "label": "Connexion", "title": "Webhook connecté",
+                  "sub": "Les notifications arriveront dans ce salon"}
     return with_image(c, lambda: _render().simple_png("Connexion", "Webhook connecté",
                                                      "Les notifications arriveront dans ce salon"), "Webhook connecté")
