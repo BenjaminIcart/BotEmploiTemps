@@ -10,6 +10,7 @@ from aiohttp import web
 
 import config as C
 import db
+import notifs
 import push
 from cards import JOURS
 from config import TZ
@@ -485,7 +486,8 @@ def make_app(state: dict, actions: dict) -> web.Application:
                "<div id=pstat class=sub>Vérification…</div>"
                "<button id=pbtn class=btn type=button style='margin-top:12px;display:none'>Activer les notifications</button>"
                f"<div class=sub style='font-size:13px;margin-top:10px'>{n_dev} appareil(s) abonné(s)"
-               + (f" · <a href='/config/test/push{t}'><u>envoyer un test</u></a>" if n_dev else "") + "</div></div>",
+               + (f" · <a href='/config/test/push{t}'><u>envoyer un test</u></a>" if n_dev else "")
+               + f" · <a href='/n{t}'><u>historique</u></a></div></div>",
                PUSH_JS,
                f"<form class=form method=post action='/config{t}'>"]
         open_sec = False
@@ -549,6 +551,39 @@ def make_app(state: dict, actions: dict) -> web.Application:
         return page("".join(map(render_card, cs)) +
                     f"<a class='btn g' href='/config{tok(request)}'>Retour aux réglages</a>", request, "/config", "Test")
 
+    # ---------- notifications (ouvertes depuis le téléphone) ----------
+    async def notif_page(request):
+        n = notifs.get(request.match_info["nid"])
+        if not n:
+            return page("<div class=warn>Notification expirée.</div>", request, "/", "Notification")
+        t = tok(request)
+        when = n["ts"][11:16] + " · " + n["ts"][8:10] + "/" + n["ts"][5:7]
+        out = [f"<div class=sub style='margin:4px 4px 12px'>{e(n['body'])}<br><small>{when}</small></div>"]
+        for c in n["cards"]:
+            if c.get("png"):
+                out.append(f"<img class=full alt='{e(c.get('title', ''))}' src='/n/img/{e(c['png'])}{t}'>")
+            else:
+                out.append(render_card(c["card"]))
+        out.append(f"<div class=btns><a class=btn href='/{t}'>Accueil</a><a class='btn g' href='/n{t}'>Toutes les notifs</a></div>")
+        return page("".join(out), request, "/", n["title"])
+
+    async def notif_img(request):
+        p = notifs.png_path(request.match_info["name"])
+        if not p:
+            raise web.HTTPNotFound()
+        return web.Response(body=p.read_bytes(), content_type="image/png",
+                            headers={"Cache-Control": "private, max-age=604800"})
+
+    async def notif_list(request):
+        t = tok(request)
+        lst = notifs.latest(30)
+        if not lst:
+            return page("<div class=free>Aucune notification pour l'instant</div>", request, "/", "Notifications")
+        rows = "".join(f"<a class=hrow href='/n/{n['id']}{t}'><span>{n['ts'][11:16]}</span>"
+                       f"<b>{e(n['title'])}<br><small class=sub style='font-weight:400'>{e(n['body'])}</small></b>"
+                       f"<span class=chev>›</span></a>" for n in lst)
+        return page(f"<div class=hist>{rows}</div>", request, "/", "Notifications")
+
     async def manifest(_):
         return web.json_response(MANIFEST, content_type="application/manifest+json")
 
@@ -595,6 +630,9 @@ def make_app(state: dict, actions: dict) -> web.Application:
     app.router.add_get("/config", config_view)
     app.router.add_post("/config", config_post)
     app.router.add_get("/config/test/{what}", test)
+    app.router.add_get("/n", notif_list)
+    app.router.add_get("/n/img/{name}", notif_img)
+    app.router.add_get("/n/{nid}", notif_page)
     app.router.add_get("/manifest.json", manifest)
     app.router.add_get("/sw.js", sw)
     app.router.add_get("/icon-180.png", png_icon(180))

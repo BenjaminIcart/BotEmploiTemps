@@ -13,6 +13,7 @@ import cards as K
 import config as C
 import db
 import ics_sync
+import notifs
 import push
 import trains
 import web
@@ -50,7 +51,14 @@ async def send(embeds: list, content: str | None = None) -> bool:
         if first:
             body = content or first.get("_notif") or first.get("_notif_edt") or first.get("description", "")
             title = re.sub(r"^[^\wÀ-ÿ]+", "", first.get("title", "EDT & Trains")).strip() or "EDT & Trains"
-            n = await push.send(title, re.sub(r"[*`~]", "", body), "/", tag=title[:40])
+            body = re.sub(r"[*`~]", "", body)
+            url = "/"
+            if push.subs():
+                try:
+                    url = f"/n/{notifs.save(embeds, title, body)}"  # appui sur la notif → ses images
+                except Exception as e:
+                    log.warning("Historique notif : %s", e)
+            n = await push.send(title, body, url, tag=title[:40])
             ok = ok or n > 0
     return ok
 
