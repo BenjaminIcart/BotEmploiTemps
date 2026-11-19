@@ -467,7 +467,11 @@ def chart_svg(rows):
 
 def monitor_form(m: dict | None, action: str) -> str:
     m = m or {"name": "", "type": "http", "target": "", "interval": 60, "timeout": 10, "keyword": "",
-              "accepted": "200-399", "retries": 2, "notify": 1, "ssl_days": 14}
+              "accepted": "200-399", "retries": 2, "notify": 1, "ssl_days": 14, "auth_type": "none",
+              "auth_user": "", "auth_pass": "", "headers": "", "ignore_tls": 0}
+    at = m.get("auth_type") or "none"
+    aopts = "".join(f"<option value={k}{' selected' if at == k else ''}>{v}</option>" for k, v in monitor.AUTH_TYPES.items())
+    pass_ph = "•••••••• enregistré — vide = inchangé" if m.get("auth_pass") else ""
     opts = "".join(f"<option value={k}{' selected' if m['type'] == k else ''}>{v}</option>"
                    for k, v in monitor.TYPES.items())
     return f"""<form class=form method=post action="{action}"><div class=card>
@@ -477,7 +481,16 @@ def monitor_form(m: dict | None, action: str) -> str:
 <label>Nom</label><input name=name value="{e(m['name'])}" placeholder="vide = nom du domaine">
 <div id=kw><label>Mot-clé attendu dans la page</label><input name=keyword value="{e(m['keyword'])}" placeholder="ex. Home Assistant"></div>
 <div id=codes><label>Codes HTTP acceptés</label><input name=accepted value="{e(m['accepted'])}"><small>ex. 200-399 ou 200,401</small></div>
-</div><div class=lbl>Vérification</div><div class=card><div class=grid4 style="gap:0 12px">
+</div><div id=authsec><div class=lbl>Authentification</div><div class=card>
+<label>Type</label><select name=auth_type id=atype>{aopts}</select>
+<div id=a_user><label>Identifiant</label><input name=auth_user value="{e(m.get('auth_user') or '')}" autocomplete=off></div>
+<div id=a_pass><label id=a_pass_l>Mot de passe</label><input type=password name=auth_pass placeholder="{e(pass_ph)}" autocomplete=new-password></div>
+<div id=a_head><label>En-têtes (un par ligne)</label><textarea name=headers placeholder="X-API-Key: abc123&#10;Cookie: session=…">{e(m.get('headers') or '')}</textarea>
+<small>Format « Nom: valeur ». Pratique pour une clé d'API ou un cookie de session.</small></div>
+<label class=ck><input type=checkbox name=ignore_tls value=1{' checked' if m.get('ignore_tls') else ''}> Accepter les certificats auto-signés</label>
+<small>Pour Proxmox, un NAS, un routeur… en https avec leur propre certificat.</small>
+<small style="margin-top:10px">Astuce : pour un site avec page de connexion, surveille plutôt la page de login avec le type « HTTP + mot-clé », ou accepte le code 401 dans « Codes HTTP acceptés ».</small>
+</div></div><div class=lbl>Vérification</div><div class=card><div class=grid4 style="gap:0 12px">
 <div><label>Toutes les (s)</label><input type=number inputmode=numeric name=interval min=20 value="{m['interval']}"></div>
 <div><label>Délai max (s)</label><input type=number inputmode=numeric name=timeout min=2 value="{m['timeout']}"></div>
 <div><label>Échecs avant alerte</label><input type=number inputmode=numeric name=retries min=1 value="{m['retries']}"></div>
@@ -488,6 +501,12 @@ def monitor_form(m: dict | None, action: str) -> str:
 const ty=document.getElementById('mtype'),kw=document.getElementById('kw'),co=document.getElementById('codes'),th=document.getElementById('thint');
 function upd(){{const v=ty.value;kw.style.display=v==='keyword'?'':'none';co.style.display=(v==='http'||v==='keyword')?'':'none';
 th.textContent={{http:"URL du site (https:// ajouté si besoin)",keyword:"URL de la page à vérifier",tcp:"hôte:port, ex. 192.168.1.10:8123",ping:"IP ou nom d'hôte"}}[v]}}
+const at=document.getElementById('atype'),au=document.getElementById('a_user'),ap=document.getElementById('a_pass'),
+ah=document.getElementById('a_head'),apl=document.getElementById('a_pass_l'),as_=document.getElementById('authsec');
+function upa(){{const v=at.value;au.style.display=v==='basic'?'':'none';ap.style.display=(v==='basic'||v==='bearer')?'':'none';
+apl.textContent=v==='bearer'?'Jeton':'Mot de passe';ah.style.display=v==='header'?'':'none';
+as_.style.display=(ty.value==='http'||ty.value==='keyword')?'':'none'}}
+at.onchange=upa;ty.addEventListener('change',upa);upa();
 ty.onchange=upd;upd();
 </script>"""
 
@@ -899,8 +918,13 @@ def make_app(state: dict, actions: dict) -> web.Application:
                 f"<div class=sub>{link}</div>"
                 f"<div class=bk style='margin-top:12px'><span class='dot {st}'></span><b>{e(info.get('msg') or 'Pas encore vérifié')}</b>"
                 f"<span class=sub style='margin-left:auto;font-size:13px'>{_ago(info.get('last'))}</span></div>"
-                + (f"<div class=row style='margin-top:10px'><span class='chip {'c-late' if cert <= m['ssl_days'] else ''}'>"
-                   f"Certificat : {cert} j</span></div>" if cert is not None else "") + "</div>")
+                + "<div class=row style='margin-top:10px'>"
+                + (f"<span class='chip {'c-late' if cert <= m['ssl_days'] else ''}'>Certificat : {cert} j</span>"
+                   if cert is not None else "")
+                + (f"<span class=chip>🔒 {e(monitor.AUTH_TYPES[m['auth_type']].split(' (')[0])}</span>"
+                   if (m.get('auth_type') or 'none') != 'none' else "")
+                + ("<span class=chip>Certificat auto-signé accepté</span>" if m.get("ignore_tls") else "")
+                + "</div></div>")
         stats = "".join(f"<div class=stat><b>{'—' if v is None else f'{v:g} %'}</b><small>dispo {lab}</small></div>"
                         for lab, v in (("24 h", monitor.uptime(mid, 24)), ("7 j", monitor.uptime(mid, 168)),
                                        ("30 j", monitor.uptime(mid, 720))))

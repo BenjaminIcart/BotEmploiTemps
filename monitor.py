@@ -32,9 +32,22 @@ CREATE TABLE IF NOT EXISTS incidents (id INTEGER PRIMARY KEY AUTOINCREMENT, moni
   start REAL, end REAL, reason TEXT);
 """)
 con.commit()
+# colonnes ajoutées après coup (authentification)
+_cols = {r[1] for r in con.execute("PRAGMA table_info(monitors)")}
+for col, ddl in (("auth_type", "TEXT DEFAULT 'none'"), ("auth_user", "TEXT DEFAULT ''"), ("auth_pass", "TEXT DEFAULT ''"),
+                 ("headers", "TEXT DEFAULT ''"), ("ignore_tls", "INTEGER DEFAULT 0")):
+    if col not in _cols:
+        con.execute(f"ALTER TABLE monitors ADD COLUMN {col} {ddl}")
+con.commit()
 
+AUTH_TYPES = {"none": "Aucune", "basic": "Identifiant + mot de passe (Basic)", "bearer": "Jeton (Bearer)",
+              "header": "En-têtes personnalisés"}
 TYPES = {"http": "HTTP(S)", "keyword": "HTTP + mot-clé", "tcp": "Port TCP", "ping": "Ping"}
-FIELDS = ["name", "type", "target", "interval", "timeout", "keyword", "accepted", "retries", "notify", "ssl_days"]
+FIELDS = ["name", "type", "target", "interval", "timeout", "keyword", "accepted", "retries", "notify", "ssl_days",
+          "auth_type", "auth_user", "auth_pass", "headers", "ignore_tls"]
+_COLS = ["id", "name", "type", "target", "interval", "timeout", "keyword", "accepted", "retries", "paused",
+         "notify", "ssl_days", "created", "auth_type", "auth_user", "auth_pass", "headers", "ignore_tls"]
+_SEL = ",".join(_COLS)
 
 # état en mémoire : {id: {"status": "up"/"down"/"pending", "fails": n, "last": ts, "ms":…, "msg":…, "cert_days":…}}
 STATE: dict[int, dict] = {}
@@ -43,19 +56,15 @@ _notify = None  # fonction async(kind, monitor, info) branchée par main.py
 
 # ---------- base ----------
 def _row(r) -> dict:
-    keys = ["id", "name", "type", "target", "interval", "timeout", "keyword", "accepted", "retries", "paused",
-            "notify", "ssl_days", "created"]
-    return dict(zip(keys, r))
+    return dict(zip(_COLS, r))
 
 
 def all_monitors() -> list[dict]:
-    return [_row(r) for r in con.execute("SELECT id,name,type,target,interval,timeout,keyword,accepted,retries,"
-                                         "paused,notify,ssl_days,created FROM monitors ORDER BY name COLLATE NOCASE")]
+    return [_row(r) for r in con.execute(f"SELECT {_SEL} FROM monitors ORDER BY name COLLATE NOCASE")]
 
 
 def get(mid: int) -> dict | None:
-    r = con.execute("SELECT id,name,type,target,interval,timeout,keyword,accepted,retries,paused,notify,ssl_days,"
-                    "created FROM monitors WHERE id=?", (mid,)).fetchone()
+    r = con.execute(f"SELECT {_SEL} FROM monitors WHERE id=?", (mid,)).fetchone()
     return _row(r) if r else None
 
 
@@ -76,7 +85,12 @@ def clean(form: dict) -> dict:
             "timeout": num("timeout", 10, 2, 60), "keyword": str(form.get("keyword", ""))[:200],
             "accepted": str(form.get("accepted", "200-399")).strip() or "200-399",
             "retries": num("retries", 2, 1, 10), "notify": 1 if form.get("notify", "1") in ("1", "on", 1, True) else 0,
-            "ssl_days": num("ssl_days", 14, 0, 90)}
+            "ssl_days": num("ssl_days", 14, 0, 90),
+            "auth_type": form.get("auth_type") if form.get("auth_type") in AUTH_TYPES else "none",
+            "auth_user": str(form.get("auth_user", "")).strip()[:200],
+            "auth_pass": str(form.get("auth_pass", ""))[:2000],
+            "headers": str(form.get("headers", "")).strip()[:4000],
+            "ignore_tls": 1 if form.get("ignore_tls") in ("1", "on", 1, True) else 0}
 
 
 def add(form: dict) -> int:
@@ -89,6 +103,9 @@ def add(form: dict) -> int:
 
 def update(mid: int, form: dict):
     d = clean(form)
+    old = get(mid) or {}
+    if not d["auth_pass"] and d["auth_type"] == old.get("auth_type"):
+        d["auth_pass"] = old.get("auth_pass", "")  # champ vide = mot de passe / jeton inchangé
     con.execute(f"UPDATE monitors SET {','.join(k + '=?' for k in FIELDS)} WHERE id=?", [d[k] for k in FIELDS] + [mid])
     con.commit()
     STATE.pop(mid, None)
@@ -173,8 +190,21 @@ def _accepted(code: int, spec: str) -> bool:
 async def _check_http(session, m) -> tuple[bool, int, str, int | None]:
     t0 = time.perf_counter()
     cert_days = None
+    headers = {"User-Agent": "EDT-Trains-Monitor/1.0"}
+    auth = None
+    at = m.get("auth_type") or "none"
+    if at == "basic" and m.get("auth_user"):
+        auth = aiohttp.BasicAuth(m["auth_user"], m.get("auth_pass") or "")
+    elif at == "bearer" and m.get("auth_pass"):
+        headers["Authorization"] = f"Bearer {m['auth_pass'].strip()}"
+    if at == "header" or m.get("headers"):
+        for line in (m.get("headers") or "").splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                if k.strip():
+                    headers[k.strip()] = v.strip()
     async with session.get(m["target"], timeout=aiohttp.ClientTimeout(total=m["timeout"]), allow_redirects=True,
-                           headers={"User-Agent": "EDT-Trains-Monitor/1.0"}) as r:
+                           headers=headers, auth=auth, ssl=False if m.get("ignore_tls") else None) as r:
         try:  # date d'expiration du certificat
             sslobj = r.connection.transport.get_extra_info("ssl_object") if r.connection else None
             cert = sslobj.getpeercert() if sslobj else None
@@ -186,7 +216,9 @@ async def _check_http(session, m) -> tuple[bool, int, str, int | None]:
         body = await r.text(errors="ignore") if m["type"] == "keyword" else None
         ms = int((time.perf_counter() - t0) * 1000)
         if not _accepted(r.status, m["accepted"]):
-            return False, ms, f"HTTP {r.status}", cert_days
+            hint = " · identifiants refusés" if r.status in (401, 403) and at != "none" else (
+                " · authentification requise" if r.status == 401 else "")
+            return False, ms, f"HTTP {r.status}{hint}", cert_days
         if m["type"] == "keyword" and m["keyword"] and m["keyword"].lower() not in (body or "").lower():
             return False, ms, f"Mot-clé « {m['keyword']} » absent", cert_days
         return True, ms, f"HTTP {r.status}", cert_days
