@@ -13,6 +13,7 @@ import cards as K
 import config as C
 import db
 import ics_sync
+import monitor as svc  # surveillance des services (≠ monitor() = surveillance du train)
 import notifs
 import push
 import trains
@@ -387,6 +388,10 @@ async def test_prim() -> list:
     return [K.card("🚆 API PRIM OK", "green", "Gares détectées :", fields)]
 
 
+async def monitor_notify(kind, m, info):
+    await send([K.monitor_card(kind, m, info, svc.uptime(m["id"], 24))])
+
+
 def on_config_saved():
     db.put("stops", {})
     state.update(plan=None, hero=None)
@@ -411,7 +416,10 @@ async def main():
     await runner.setup()
     await aioweb.TCPSite(runner, "0.0.0.0", C.WEB_PORT).start()
     log.info("Site web : http://0.0.0.0:%d", C.WEB_PORT)
+    svc._notify = monitor_notify
+    actions["monitor_check"] = lambda m: svc.check(session, m)
     await asyncio.gather(
+        svc.loop(session),
         every(lambda: C.get("ICS_REFRESH_MIN") * 60, do_ics_sync, "ics"),
         every(60, recap_check, "recap"),
         every(60, virtual_check, "virtual"),

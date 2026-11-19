@@ -35,3 +35,8 @@ pct exec <CTID> -- bash /opt/edt-trains/update.sh
 3. iPhone (iOS 16.4+) : Safari → Partager → « Sur l'écran d'accueil », ouvrir l'appli depuis l'icône.
 4. Réglages → **Activer les notifications**, puis « envoyer un test ».
 5. Choisir Discord / téléphone / les deux dans Réglages → Notifications.
+
+## Surveillance des services (remplace Uptime Kuma)
+Onglet **Services** : HTTP(S), HTTP + mot-clé, port TCP, ping. Intervalle, délai, nombre d'échecs avant alerte,
+alerte d'expiration SSL, pause, historique 30 jours, % de disponibilité 24 h / 7 j / 30 j, incidents,
+notifications Discord / téléphone quand un service tombe ou revient. Ajout rapide : une adresse par ligne.

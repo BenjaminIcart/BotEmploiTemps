@@ -420,3 +420,24 @@ def simple_png(label, title, subtitle, accent="green", kind="ok"):
 def _minutes(hm: str) -> int:
     h, m = map(int, hm.split(":"))
     return h * 60 + m
+
+
+def monitor_png(kind, name, target, line, chips=()):
+    """Alerte de surveillance : service hors ligne / de retour / certificat bientôt expiré."""
+    acc, icon, label = {"down": ("red", "cancel", "Service hors ligne"), "up": ("green", "ok", "Service de retour"),
+                        "ssl": ("orange", "late", "Certificat bientôt expiré")}[kind]
+    c = Canvas(None, acc)
+    c.text(PAD + 66, 42, label.upper(), 14, True, c.accent)
+    c.text(PAD + 66, 64, c.fit(name, W - 2 * PAD - 80, 32, True), 32, True)
+    icon_status(c, PAD + 26, 76, icon)
+    c.text(PAD + 66, 112, c.fit(target, W - 2 * PAD - 80, 17), 17, False, MUTE)
+    y = 152
+    c.rect(PAD, y, W - PAD, y + 54, 14, ROW)
+    c.text(PAD + 18, y + 27, c.fit(line, W - 2 * PAD - 36, 19, True), 19, True, TXT, "lm")
+    y += 68
+    if chips:
+        x = PAD
+        for txt in chips:
+            x += c.chip(x, y, txt, TXT, LINE, 15) + 8
+        y += 40
+    return c.png(y - 10)

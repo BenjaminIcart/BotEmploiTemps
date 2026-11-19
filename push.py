@@ -112,20 +112,38 @@ self.addEventListener('notificationclick', e => {
 
 
 def icon_png(size: int) -> bytes:
-    """Icône de l'appli (PNG, nécessaire pour iOS)."""
+    """Icône de l'appli (PNG) : dégradé bleu → indigo, avant de train blanc. iOS arrondit lui-même les coins."""
     import io
 
     from PIL import Image, ImageDraw
     s = size * 4
-    img = Image.new("RGB", (s, s), (10, 132, 255))
-    d = ImageDraw.Draw(img)
     u = s / 100
-    d.rounded_rectangle([28 * u, 18 * u, 72 * u, 66 * u], 12 * u, fill="white")
-    d.rectangle([28 * u, 42 * u, 72 * u, 47 * u], fill=(10, 132, 255))
-    d.ellipse([35 * u, 52 * u, 43 * u, 60 * u], fill=(10, 132, 255))
-    d.ellipse([57 * u, 52 * u, 65 * u, 60 * u], fill=(10, 132, 255))
-    d.line([(40 * u, 70 * u), (34 * u, 84 * u)], fill="white", width=int(6 * u))
-    d.line([(60 * u, 70 * u), (66 * u, 84 * u)], fill="white", width=int(6 * u))
+    # dégradé diagonal
+    grad = Image.new("RGB", (s, s))
+    top, bot = (24, 150, 255), (88, 86, 214)
+    gd = ImageDraw.Draw(grad)
+    for i in range(s * 2):
+        t = i / (s * 2)
+        col = tuple(int(top[k] + (bot[k] - top[k]) * t) for k in range(3))
+        gd.line([(i, 0), (0, i)], fill=col, width=2)
+    img = grad
+    d = ImageDraw.Draw(img, "RGBA")
+    # halo léger
+    d.ellipse([10 * u, -30 * u, 110 * u, 55 * u], fill=(255, 255, 255, 28))
+    # rails
+    d.polygon([(30 * u, 92 * u), (40 * u, 74 * u), (44 * u, 74 * u), (36 * u, 92 * u)], fill=(255, 255, 255, 150))
+    d.polygon([(70 * u, 92 * u), (60 * u, 74 * u), (56 * u, 74 * u), (64 * u, 92 * u)], fill=(255, 255, 255, 150))
+    # caisse du train
+    d.rounded_rectangle([25 * u, 16 * u, 75 * u, 76 * u], 15 * u, fill=(255, 255, 255, 255))
+    # pare-brise
+    d.rounded_rectangle([32 * u, 24 * u, 68 * u, 46 * u], 7 * u, fill=(28, 44, 92, 255))
+    d.polygon([(36 * u, 44 * u), (52 * u, 26 * u), (58 * u, 26 * u), (42 * u, 44 * u)], fill=(255, 255, 255, 40))
+    # bandeau
+    d.rounded_rectangle([44 * u, 19 * u, 56 * u, 21.5 * u], 1.2 * u, fill=(88, 86, 214, 255))
+    # phares
+    for cx in (36, 64):
+        d.ellipse([(cx - 4.5) * u, 56 * u, (cx + 4.5) * u, 65 * u], fill=(255, 196, 46, 255))
+    d.rounded_rectangle([45 * u, 59 * u, 55 * u, 62 * u], 1.5 * u, fill=(200, 205, 220, 255))
     img = img.resize((size, size), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, "PNG")

@@ -329,3 +329,31 @@ def test_card():
                   "sub": "Les notifications arriveront dans ce salon"}
     return with_image(c, lambda: _render().simple_png("Connexion", "Webhook connecté",
                                                      "Les notifications arriveront dans ce salon"), "Webhook connecté")
+
+
+def monitor_card(kind, m, info, uptime24=None):
+    """Notification de surveillance (Uptime Kuma maison)."""
+    import time as _t
+    now = _t.strftime("%H:%M")
+    if kind == "down":
+        title, color = f"🔴 {m['name']} est hors ligne", "red"
+        line = info.get("msg", "")
+        chips = [f"Depuis {now}", f"{info.get('fails', 1)} échec(s) de suite"]
+        notif = f"🔴 {m['name']} hors ligne · {line}"
+    elif kind == "up":
+        title, color = f"🟢 {m['name']} est de retour", "green"
+        line = f"{info.get('msg', '')} · {info.get('ms', 0)} ms"
+        chips = [f"Panne : {info.get('duration', '?')}", f"Rétabli à {now}"]
+        notif = f"🟢 {m['name']} de retour après {info.get('duration', '?')}"
+    else:
+        title, color = f"🟠 Certificat de {m['name']}", "orange"
+        line = f"Le certificat SSL expire dans {info.get('days')} jour(s)"
+        chips = []
+        notif = f"🟠 {m['name']} : certificat SSL expire dans {info.get('days')} j"
+    if uptime24 is not None:
+        chips.append(f"Dispo 24 h : {uptime24:g} %")
+    c = card(title, color, f"**{line}**\n{m['target']}", footer=" · ".join(chips))
+    c["_notif"] = notif
+    c["_data"] = {"type": "monitor", "kind": kind, "id": m["id"], "name": m["name"], "target": m["target"],
+                  "line": line, "chips": chips}
+    return with_image(c, lambda: _render().monitor_png(kind, m["name"], m["target"], line, chips), f"**{line}**")
